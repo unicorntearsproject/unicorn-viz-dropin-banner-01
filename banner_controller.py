@@ -657,42 +657,66 @@ void main() {
         if width <= 0 or height <= 0:
             return
 
+        canvas_w = int(width)
+        canvas_h = int(height)
+        viewport = (0, 0, canvas_w, canvas_h)
+
+        # In span/mirror modes, bind to the app's primary overlay viewport so
+        # this drop-in follows the same monitor anchoring as core overlays.
+        primary_view = getattr(self._app, '_primary_display_viewport', None)
+        if callable(primary_view):
+            resolved = primary_view()
+            if (
+                isinstance(resolved, tuple)
+                and len(resolved) == 4
+                and int(resolved[2]) > 0
+                and int(resolved[3]) > 0
+            ):
+                viewport = (
+                    int(resolved[0]),
+                    int(resolved[1]),
+                    int(resolved[2]),
+                    int(resolved[3]),
+                )
+                canvas_w = int(resolved[2])
+                canvas_h = int(resolved[3])
+
         self._ctx.screen.use()
-        self._ctx.viewport = (0, 0, int(width), int(height))
+        self._ctx.viewport = viewport
 
         # Banner strip
         if self._enabled:
-            banner = self._build_banner_image(int(width))
+            banner = self._build_banner_image(canvas_w)
             arr = np.asarray(banner, dtype=np.uint8)
             self._banner_tex = self._ensure_texture(self._banner_tex, (arr.shape[1], arr.shape[0]))
             self._banner_tex.write(arr.tobytes())
-            y = int(height - self._banner_height)
+            y = int(canvas_h - self._banner_height)
             self._draw_texture(
                 self._banner_tex,
                 0.0,
                 float(y),
-                float(width),
+                float(canvas_w),
                 float(self._banner_height),
-                int(width),
-                int(height),
+                canvas_w,
+                canvas_h,
             )
 
         # Config modal
         if self._show_config:
-            modal, mw, mh = self._build_modal_image(int(width))
+            modal, mw, mh = self._build_modal_image(canvas_w)
             arr2 = np.asarray(modal, dtype=np.uint8)
             self._modal_tex = self._ensure_texture(self._modal_tex, (arr2.shape[1], arr2.shape[0]))
             self._modal_tex.write(arr2.tobytes())
-            x = float((width - mw) // 2)
-            y = float(height - self._banner_height - mh - 10)
+            x = float((canvas_w - mw) // 2)
+            y = float(canvas_h - self._banner_height - mh - 10)
             self._draw_texture(
                 self._modal_tex,
                 x,
                 y,
                 float(mw),
                 float(mh),
-                int(width),
-                int(height),
+                canvas_w,
+                canvas_h,
             )
 
     def shutdown(self) -> None:
