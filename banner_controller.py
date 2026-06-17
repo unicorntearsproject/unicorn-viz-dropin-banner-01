@@ -68,6 +68,10 @@ class BannerController:
 
     HELP_ENTRIES = HELP_ENTRIES
 
+    def captures_global_hotkeys(self) -> bool:
+        """Return True when banner UI should own plain key input."""
+        return bool(self._show_config)
+
     def __init__(self, app: Any, cfg: dict[str, Any] | None = None) -> None:
         self._app = app
         self._cfg = dict(cfg or {})
