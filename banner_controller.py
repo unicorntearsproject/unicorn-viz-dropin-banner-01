@@ -279,6 +279,48 @@ void main() {
         import sdl2  # noqa: PLC0415
 
         ctrl = bool(mod & sdl2.KMOD_CTRL)
+        alt = bool(mod & sdl2.KMOD_ALT)
+        gui = bool(mod & sdl2.KMOD_GUI)
+
+        # While editing text, consume plain key presses first so runtime/global
+        # shortcuts do not fire from typing input.
+        if self._show_config and self._edit_mode:
+            if sym == sdl2.SDLK_ESCAPE:
+                self._edit_mode = False
+                self._show_config = False
+                self._persist_runtime_state()
+                return 'Banner config: OFF'
+
+            if sym in (sdl2.SDLK_RETURN, sdl2.SDLK_KP_ENTER):
+                if bool(mod & sdl2.KMOD_SHIFT):
+                    self._text += '\n'
+                    self._persist_runtime_state()
+                    return 'Banner text: new line'
+                self._edit_mode = False
+                self._persist_runtime_state()
+                return 'Banner text edit: OFF'
+
+            if sym == sdl2.SDLK_BACKSPACE:
+                if self._text:
+                    self._text = self._text[:-1]
+                    self._persist_runtime_state()
+                return 'Banner text: delete'
+
+            if sym == sdl2.SDLK_TAB:
+                self._text += '    '
+                self._persist_runtime_state()
+                return 'Banner text: tab'
+
+            # Ignore control/meta combos while text editing.
+            if ctrl or alt or gui:
+                return True
+
+            ch = self._sym_to_char(sym, mod)
+            if ch:
+                self._text += ch
+                self._persist_runtime_state()
+                return True
+            return True
 
         if sym == sdl2.SDLK_b and ctrl:
             self._show_config = not self._show_config
@@ -302,31 +344,10 @@ void main() {
             return 'Banner config: OFF'
 
         if sym in (sdl2.SDLK_RETURN, sdl2.SDLK_KP_ENTER):
-            if self._edit_mode and bool(mod & sdl2.KMOD_SHIFT):
-                self._text += '\n'
-                self._persist_runtime_state()
-                return 'Banner text: new line'
             self._edit_mode = not self._edit_mode
             if not self._edit_mode:
                 self._persist_runtime_state()
             return 'Banner text edit: ON' if self._edit_mode else 'Banner text edit: OFF'
-
-        if self._edit_mode:
-            if sym == sdl2.SDLK_BACKSPACE:
-                if self._text:
-                    self._text = self._text[:-1]
-                    self._persist_runtime_state()
-                return 'Banner text: delete'
-            if sym == sdl2.SDLK_TAB:
-                self._text += '    '
-                self._persist_runtime_state()
-                return 'Banner text: tab'
-            ch = self._sym_to_char(sym, mod)
-            if ch:
-                self._text += ch
-                self._persist_runtime_state()
-                return True
-            return True
 
         if sym == sdl2.SDLK_LEFT:
             self._scroll_speed = max(40.0, self._scroll_speed - 10.0)
