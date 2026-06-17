@@ -281,6 +281,14 @@ void main() {
         ctrl = bool(mod & sdl2.KMOD_CTRL)
         alt = bool(mod & sdl2.KMOD_ALT)
         gui = bool(mod & sdl2.KMOD_GUI)
+        shift = bool(mod & sdl2.KMOD_SHIFT)
+
+        # Special-case U while config is open so replay-splash never steals it.
+        if self._show_config and sym == sdl2.SDLK_u and not (ctrl or alt or gui):
+            if self._edit_mode:
+                self._text += 'U' if shift else 'u'
+                self._persist_runtime_state()
+            return True
 
         # While editing text, consume plain key presses first so runtime/global
         # shortcuts do not fire from typing input.
