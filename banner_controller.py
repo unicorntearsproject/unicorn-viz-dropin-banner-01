@@ -5,8 +5,10 @@ at runtime without modifying core overlay internals.
 """
 from __future__ import annotations
 
+import json
 import logging
 import math
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +51,18 @@ _FONT_CANDIDATES = [
 ]
 
 
+@dataclass(slots=True)
+class _TextAreaLayout:
+    """Simple reusable text-area layout descriptor."""
+
+    x: int
+    y: int
+    w: int
+    h: int
+    padding: int = 10
+    lines: int = 4
+
+
 class BannerController:
     """Render a configurable bottom-edge marquee strip over all effects."""
 
@@ -72,6 +86,7 @@ class BannerController:
         self._font_px = int(self._cfg.get('font_px', 28) or 28)
         self._beat_color_enabled = bool(self._cfg.get('beat_color_enabled', True))
         self._alpha = float(self._cfg.get('alpha', 0.88) or 0.88)
+        self._state_path = self._resolve_state_path(self._cfg.get('state_file', 'logs/banner-state.json'))
 
         self._scroll_speed = max(40.0, min(420.0, self._scroll_speed))
         self._font_px = max(16, min(56, self._font_px))
@@ -128,7 +143,65 @@ void main() {
         self._white_tex = self._ctx.texture((1, 1), 4, data=bytes([255, 255, 255, 255]))
         self._white_tex.filter = moderngl.LINEAR, moderngl.LINEAR
 
+        self._restore_local_state()
         self._restore_runtime_state()
+
+    def _resolve_state_path(self, raw: Any) -> Path:
+        candidate = str(raw or 'logs/banner-state.json').strip()
+        if not candidate:
+            candidate = 'logs/banner-state.json'
+        return resolve_path(candidate)
+
+    def _read_local_state(self) -> dict[str, Any]:
+        try:
+            if self._state_path.exists():
+                payload = json.loads(self._state_path.read_text(encoding='utf-8'))
+                if isinstance(payload, dict):
+                    return payload
+        except Exception as exc:
+            log.warning('Banner state read failed from %s: %s', self._state_path, exc)
+        return {}
+
+    def _write_local_state(self, payload: dict[str, Any]) -> None:
+        try:
+            self._state_path.parent.mkdir(parents=True, exist_ok=True)
+            self._state_path.write_text(
+                json.dumps(payload, indent=2, sort_keys=True),
+                encoding='utf-8',
+            )
+        except Exception as exc:
+            log.warning('Banner state write failed to %s: %s', self._state_path, exc)
+
+    def _apply_state_payload(self, raw: Any) -> None:
+        if not isinstance(raw, dict):
+            return
+        text = str(raw.get('text', self._text) or self._text).strip()
+        if text:
+            self._text = text
+        self._enabled = bool(raw.get('enabled', self._enabled))
+        self._scroll_speed = max(
+            40.0,
+            min(
+                420.0,
+                float(raw.get('scroll_speed', self._scroll_speed) or self._scroll_speed),
+            ),
+        )
+        self._font_px = max(
+            16,
+            min(56, int(raw.get('font_px', self._font_px) or self._font_px)),
+        )
+        self._beat_color_enabled = bool(
+            raw.get('beat_color_enabled', self._beat_color_enabled),
+        )
+        self._alpha = max(
+            0.35,
+            min(1.0, float(raw.get('alpha', self._alpha) or self._alpha)),
+        )
+        self._font = self._load_font(self._font_px)
+        self._banner_height = self._compute_banner_height()
+
+    def _restore_local_state(self) -> None:
+        self._apply_state_payload(self._read_local_state())
 
     def _load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         for path in _FONT_CANDIDATES:
@@ -156,21 +229,10 @@ void main() {
             'alpha': float(self._alpha),
         }
         self._vj_api.set_runtime_state('banner', payload)
+        self._write_local_state(payload)
 
     def _restore_runtime_state(self) -> None:
-        raw = self._vj_api.get_runtime_state('banner', default={})
-        if not isinstance(raw, dict):
-            return
-        text = str(raw.get('text', self._text) or self._text).strip()
-        if text:
-            self._text = text
-        self._enabled = bool(raw.get('enabled', self._enabled))
-        self._scroll_speed = max(40.0, min(420.0, float(raw.get('scroll_speed', self._scroll_speed) or self._scroll_speed)))
-        self._font_px = max(16, min(56, int(raw.get('font_px', self._font_px) or self._font_px)))
-        self._beat_color_enabled = bool(raw.get('beat_color_enabled', self._beat_color_enabled))
-        self._alpha = max(0.35, min(1.0, float(raw.get('alpha', self._alpha) or self._alpha)))
-        self._font = self._load_font(self._font_px)
-        self._banner_height = self._compute_banner_height()
+        self._apply_state_payload(self._vj_api.get_runtime_state('banner', default={}))
 
     def _set_font_px(self, value: int) -> None:
         value = max(16, min(56, int(value)))
@@ -240,7 +302,13 @@ void main() {
             return 'Banner config: OFF'
 
         if sym in (sdl2.SDLK_RETURN, sdl2.SDLK_KP_ENTER):
+            if self._edit_mode and bool(mod & sdl2.KMOD_SHIFT):
+                self._text += '\n'
+                self._persist_runtime_state()
+                return 'Banner text: new line'
             self._edit_mode = not self._edit_mode
+            if not self._edit_mode:
+                self._persist_runtime_state()
             return 'Banner text edit: ON' if self._edit_mode else 'Banner text edit: OFF'
 
         if self._edit_mode:
@@ -249,6 +317,10 @@ void main() {
                     self._text = self._text[:-1]
                     self._persist_runtime_state()
                 return 'Banner text: delete'
+            if sym == sdl2.SDLK_TAB:
+                self._text += '    '
+                self._persist_runtime_state()
+                return 'Banner text: tab'
             ch = self._sym_to_char(sym, mod)
             if ch:
                 self._text += ch
@@ -373,13 +445,14 @@ void main() {
 
     def _build_modal_image(self, width: int) -> tuple[Image.Image, int, int]:
         panel_w = min(width - 40, 1260)
-        panel_h = 176
+        panel_h = 284
         panel = Image.new('RGBA', (panel_w, panel_h), (9, 12, 24, 240))
         draw = ImageDraw.Draw(panel)
 
         draw.rectangle((0, 0, panel_w - 1, panel_h - 1), outline=(72, 186, 255, 255), width=2)
         title_font = self._load_font(max(18, self._font_px - 4))
         body_font = self._load_font(max(14, self._font_px - 9))
+        mono_font = self._load_font(max(14, self._font_px - 10))
 
         draw.text((14, 10), 'BANNER CONFIG', font=title_font, fill=(170, 220, 255, 255))
         status = 'ON' if self._enabled else 'OFF'
@@ -387,22 +460,162 @@ void main() {
         draw.text((380, 12), f'Speed: {self._scroll_speed:.0f}px/s', font=body_font, fill=(230, 236, 246, 255))
         draw.text((560, 12), f'Font: {self._font_px}px', font=body_font, fill=(230, 236, 246, 255))
         draw.text((700, 12), f'Beat Color: {"ON" if self._beat_color_enabled else "OFF"}', font=body_font, fill=(230, 236, 246, 255))
+        self._draw_config_sprite(draw, panel_w)
 
         draw.text((14, 44), 'B: toggle banner   Ctrl+B: close config   Enter: text edit mode', font=body_font, fill=(184, 204, 224, 255))
         draw.text((14, 64), 'Left/Right: speed   Up/Down: font   Ctrl+C: beat color   Ctrl+R: reset text', font=body_font, fill=(184, 204, 224, 255))
+        draw.text((14, 84), 'Shift+Enter: new line   Backspace: delete   Tab: spaces', font=body_font, fill=(184, 204, 224, 255))
 
         edit_state = 'EDITING' if self._edit_mode else 'VIEW'
         edit_color = (255, 214, 110, 255) if self._edit_mode else (176, 196, 220, 255)
-        draw.text((14, 90), f'Mode: {edit_state}', font=body_font, fill=edit_color)
+        draw.text((14, 106), f'Mode: {edit_state}', font=body_font, fill=edit_color)
 
-        text_preview = self._text
-        if self._edit_mode and (int(self._color_phase * 2.0) % 2 == 0):
-            text_preview += '_'
-        if len(text_preview) > 170:
-            text_preview = text_preview[:167] + '...'
-        draw.text((14, 112), text_preview, font=body_font, fill=(235, 240, 248, 255))
+        textarea = _TextAreaLayout(
+            x=14,
+            y=128,
+            w=panel_w - 28,
+            h=panel_h - 142,
+            padding=10,
+            lines=4,
+        )
+        self._draw_textarea(
+            draw=draw,
+            font=mono_font,
+            layout=textarea,
+            value=self._text,
+            editing=self._edit_mode,
+        )
 
         return panel, panel_w, panel_h
+
+    def _draw_config_sprite(self, draw: ImageDraw.ImageDraw, panel_w: int) -> None:
+        sprite_size = 64
+        x0 = panel_w - sprite_size - 16
+        y0 = 10
+        x1 = x0 + sprite_size
+        y1 = y0 + sprite_size
+
+        draw.rounded_rectangle(
+            (x0, y0, x1, y1),
+            radius=8,
+            fill=(7, 12, 24, 220),
+            outline=(72, 186, 255, 255),
+            width=2,
+        )
+
+        phase = self._color_phase * 1.8
+        for idx in range(6):
+            frac = (phase * 0.17 + idx * 0.16) % 1.0
+            yy = y0 + 7 + int(frac * (sprite_size - 14))
+            glow = 96 + int(120 * (1.0 - abs(frac - 0.5) * 2.0))
+            draw.line(
+                (x0 + 8, yy, x1 - 8, yy),
+                fill=(30, min(255, glow), min(255, glow + 30), 220),
+                width=1,
+            )
+
+        cx = x0 + sprite_size / 2.0 + math.sin(phase * 1.35) * (sprite_size * 0.22)
+        cy = y0 + sprite_size / 2.0 + math.cos(phase * 1.95) * (sprite_size * 0.22)
+        radius = 5 + int(2 * min(1.0, self._beat + self._treble * 0.5))
+        glow = (255, 140, 120, 235)
+        draw.ellipse(
+            (cx - radius - 3, cy - radius - 3, cx + radius + 3, cy + radius + 3),
+            fill=(60, 120, 200, 130),
+        )
+        draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=glow)
+
+    def _line_height(self, draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont) -> int:
+        bbox = draw.textbbox((0, 0), 'Ag', font=font)
+        return max(16, int(bbox[3] - bbox[1]))
+
+    def _wrap_to_width(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        font: ImageFont.ImageFont,
+        max_width: int,
+    ) -> list[str]:
+        if max_width <= 8:
+            return [text]
+
+        def _break_long_word(word: str) -> list[str]:
+            chunks: list[str] = []
+            pending = ''
+            for ch in word:
+                candidate = pending + ch
+                if draw.textlength(candidate, font=font) <= max_width:
+                    pending = candidate
+                    continue
+                if pending:
+                    chunks.append(pending)
+                pending = ch
+            if pending:
+                chunks.append(pending)
+            return chunks or ['']
+
+        lines: list[str] = []
+        for raw in text.split('\n'):
+            paragraph = raw.rstrip('\r')
+            if not paragraph:
+                lines.append('')
+                continue
+            words = paragraph.split(' ')
+            current = ''
+            for word in words:
+                chunk = word if current == '' else f'{current} {word}'
+                if draw.textlength(chunk, font=font) <= max_width:
+                    current = chunk
+                    continue
+                if current:
+                    lines.append(current)
+                if draw.textlength(word, font=font) <= max_width:
+                    current = word
+                else:
+                    pieces = _break_long_word(word)
+                    lines.extend(pieces[:-1])
+                    current = pieces[-1]
+            lines.append(current)
+        return lines or ['']
+
+    def _draw_textarea(
+        self,
+        draw: ImageDraw.ImageDraw,
+        font: ImageFont.ImageFont,
+        layout: _TextAreaLayout,
+        value: str,
+        editing: bool,
+    ) -> None:
+        x0, y0 = layout.x, layout.y
+        x1, y1 = layout.x + layout.w, layout.y + layout.h
+
+        draw.rounded_rectangle(
+            (x0, y0, x1, y1),
+            radius=7,
+            fill=(7, 10, 20, 232),
+            outline=(90, 146, 186, 255),
+            width=2,
+        )
+
+        inner_x = x0 + layout.padding
+        inner_y = y0 + layout.padding
+        inner_w = max(20, layout.w - layout.padding * 2)
+        line_height = self._line_height(draw, font)
+
+        wrapped = self._wrap_to_width(draw, value, font, inner_w)
+        visible_lines = max(1, layout.lines)
+
+        cursor_visible = editing and (int(self._color_phase * 2.0) % 2 == 0)
+        if cursor_visible:
+            if wrapped:
+                wrapped[-1] = wrapped[-1] + '_'
+            else:
+                wrapped = ['_']
+
+        shown = wrapped[-visible_lines:]
+        for idx in range(visible_lines):
+            line = shown[idx] if idx < len(shown) else ''
+            yy = inner_y + idx * line_height
+            draw.text((inner_x, yy), line, font=font, fill=(232, 238, 246, 255))
 
     def render_overlay(self, width: int, height: int, dt: float, audio: Any) -> None:  # noqa: ARG002
         if not self._enabled and not self._show_config:
