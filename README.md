@@ -43,18 +43,12 @@ scroll_speed = 140.0
 font_px = 28
 beat_color_enabled = true
 alpha = 0.88
-state_file = "logs/banner-state.json"
 ```
 
 ## Runtime Persistence
 
-State is persisted to both:
-
-- Shared app runtime state (`banner` key)
-- Local JSON fallback file (`state_file`, default `logs/banner-state.json`)
-
-This keeps banner settings stable across restarts and resilient to runtime-state
-availability differences.
+State is persisted to the app's shared runtime state file (`banner` key in
+`runtime/global_state.json`). Banner settings survive restarts automatically.
 
 ## Structured Docs
 

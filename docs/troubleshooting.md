@@ -25,8 +25,7 @@ Troubleshooting guide for banner rendering, editing, and persistence behavior.
 ### Banner text resets after restart
 
 - Confirm runtime state save is enabled in app shutdown path.
-- Confirm banner `state_file` path is writable.
-- Check for JSON parse errors in logs related to banner state file.
+- Verify `runtime/global_state.json` file is writable.
 
 ### Config modal clips text
 

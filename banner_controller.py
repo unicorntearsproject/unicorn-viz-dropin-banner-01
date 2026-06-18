@@ -90,7 +90,6 @@ class BannerController:
         self._font_px = int(self._cfg.get('font_px', 28) or 28)
         self._beat_color_enabled = bool(self._cfg.get('beat_color_enabled', True))
         self._alpha = float(self._cfg.get('alpha', 0.88) or 0.88)
-        self._state_path = self._resolve_state_path(self._cfg.get('state_file', 'logs/banner-state.json'))
 
         self._scroll_speed = max(40.0, min(420.0, self._scroll_speed))
         self._font_px = max(16, min(56, self._font_px))
@@ -147,34 +146,9 @@ void main() {
         self._white_tex = self._ctx.texture((1, 1), 4, data=bytes([255, 255, 255, 255]))
         self._white_tex.filter = moderngl.LINEAR, moderngl.LINEAR
 
-        self._restore_local_state()
         self._restore_runtime_state()
 
-    def _resolve_state_path(self, raw: Any) -> Path:
-        candidate = str(raw or 'logs/banner-state.json').strip()
-        if not candidate:
-            candidate = 'logs/banner-state.json'
-        return resolve_path(candidate)
 
-    def _read_local_state(self) -> dict[str, Any]:
-        try:
-            if self._state_path.exists():
-                payload = json.loads(self._state_path.read_text(encoding='utf-8'))
-                if isinstance(payload, dict):
-                    return payload
-        except Exception as exc:
-            log.warning('Banner state read failed from %s: %s', self._state_path, exc)
-        return {}
-
-    def _write_local_state(self, payload: dict[str, Any]) -> None:
-        try:
-            self._state_path.parent.mkdir(parents=True, exist_ok=True)
-            self._state_path.write_text(
-                json.dumps(payload, indent=2, sort_keys=True),
-                encoding='utf-8',
-            )
-        except Exception as exc:
-            log.warning('Banner state write failed to %s: %s', self._state_path, exc)
 
     def _apply_state_payload(self, raw: Any) -> None:
         if not isinstance(raw, dict):
@@ -204,9 +178,6 @@ void main() {
         self._font = self._load_font(self._font_px)
         self._banner_height = self._compute_banner_height()
 
-    def _restore_local_state(self) -> None:
-        self._apply_state_payload(self._read_local_state())
-
     def _load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         for path in _FONT_CANDIDATES:
             try:
@@ -233,7 +204,6 @@ void main() {
             'alpha': float(self._alpha),
         }
         self._vj_api.set_runtime_state('banner', payload)
-        self._write_local_state(payload)
 
     def _restore_runtime_state(self) -> None:
         self._apply_state_payload(self._vj_api.get_runtime_state('banner', default={}))

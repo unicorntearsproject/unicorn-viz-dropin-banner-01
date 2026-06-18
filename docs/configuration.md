@@ -18,7 +18,6 @@ scroll_speed = 140.0
 font_px = 28
 beat_color_enabled = true
 alpha = 0.88
-state_file = "logs/banner-state.json"
 ```
 
 ## Keys
@@ -29,7 +28,6 @@ state_file = "logs/banner-state.json"
 - `font_px` (int): font size in pixels.
 - `beat_color_enabled` (bool): enable beat-reactive text color cycling.
 - `alpha` (float): strip opacity.
-- `state_file` (str): local fallback JSON path for persisted state.
 
 ## Valid Ranges
 
