@@ -437,13 +437,22 @@ void main() {
         draw.rectangle((0, 0, width, 2), fill=(70, 170, 255, min(255, bg_alpha + 20)))
 
         measure = draw.textlength(self._text, font=self._font)
-        loop_w = max(width + 40, int(measure) + self._gap_px)
+        measure_int = max(1, int(measure))
+        loop_w = measure_int + self._gap_px
         x0 = int(width - (self._offset_px % loop_w))
+
+        # Walk back to the leftmost copy whose right edge is still on-screen,
+        # then draw rightward until off the right edge.  This guarantees the
+        # next copy is already entering from the right before the current one
+        # exits left, giving a seamless wrap regardless of text length.
+        while x0 - loop_w + measure_int > 0:
+            x0 -= loop_w
 
         color = self._current_text_color()
         y = self._pad_y - 1
-        draw.text((x0, y), self._text, font=self._font, fill=color)
-        draw.text((x0 + loop_w, y), self._text, font=self._font, fill=color)
+        while x0 < width:
+            draw.text((x0, y), self._text, font=self._font, fill=color)
+            x0 += loop_w
         return img
 
     def _build_modal_image(self, width: int) -> tuple[Image.Image, int, int]:
