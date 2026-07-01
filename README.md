@@ -20,7 +20,7 @@ The banner supports:
 ## Controls
 
 - `B`: toggle banner on/off
-- `Ctrl+B`: toggle banner config modal
+- `Shift+B`: toggle banner config modal
 - `Enter`: toggle text edit mode while config is open
 - `Shift+Enter`: insert newline while editing
 - `Backspace`: delete previous character while editing

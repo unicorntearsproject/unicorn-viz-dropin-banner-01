@@ -13,12 +13,12 @@ Operational runbook for the banner subsystem during live sessions.
 1. Confirm drop-in is present under `drop-ins/banner-01/`.
 2. Confirm `[banner] enabled = true` in config when startup visibility is desired.
 3. Start Unicorn Viz and press `B` to verify runtime toggle.
-4. Open config with `Ctrl+B` and confirm text editor interaction.
+4. Open config with `Shift+B` and confirm text editor interaction.
 
 ## Live Controls
 
 - `B`: toggle banner strip
-- `Ctrl+B`: open/close config
+- `Shift+B`: open/close config
 - `Enter`: toggle edit mode
 - `Shift+Enter`: insert newline
 - `Esc`: close config modal
