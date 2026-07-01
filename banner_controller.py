@@ -347,7 +347,7 @@ void main() {
             self._set_font_px(self._font_px - 1)
             self._persist_runtime_state()
             return f'Banner font: {self._font_px}px'
-        if sym == sdl2.SDLK_c and ctrl:
+        if sym == sdl2.SDLK_b and alt and not ctrl and not shift and not gui:
             self._beat_color_enabled = not self._beat_color_enabled
             self._persist_runtime_state()
             return f'Banner beat color: {"ON" if self._beat_color_enabled else "OFF"}'
