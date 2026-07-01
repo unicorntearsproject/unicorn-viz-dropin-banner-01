@@ -28,8 +28,8 @@ DROPIN_CAPABILITIES = {
 }
 
 HELP_ENTRIES = [
-    ('Banner', 'B', 'Toggle bottom marquee banner on/off'),
-    ('Banner', 'Shift+B', 'Toggle banner config modal'),
+    ('Banner', 'Shift+B', 'Toggle bottom marquee banner on/off'),
+    ('Banner', 'Ctrl+B', 'Toggle banner config modal'),
     ('Banner', 'Ctrl+R', 'Reset banner text to default (in config modal)'),
     ('Banner', 'Arrows', 'Adjust speed/font while config modal is open'),
     ('Banner', 'Enter', 'Toggle live text edit mode in config modal'),
@@ -304,14 +304,14 @@ void main() {
                 return True
             return True
 
-        if sym == sdl2.SDLK_b and shift and not ctrl and not alt and not gui:
+        if sym == sdl2.SDLK_b and ctrl and not alt and not gui:
             self._show_config = not self._show_config
             if not self._show_config:
                 self._edit_mode = False
                 self._persist_runtime_state()
             return f'Banner config: {"ON" if self._show_config else "OFF"}'
 
-        if sym == sdl2.SDLK_b and not ctrl and not (mod & (sdl2.KMOD_ALT | sdl2.KMOD_SHIFT)):
+        if sym == sdl2.SDLK_b and shift and not ctrl and not alt and not gui:
             self._enabled = not self._enabled
             self._persist_runtime_state()
             return f'Banner: {"ON" if self._enabled else "OFF"}'
@@ -474,7 +474,7 @@ void main() {
         draw.text((700, 12), f'Beat Color: {"ON" if self._beat_color_enabled else "OFF"}', font=body_font, fill=(230, 236, 246, 255))
         self._draw_config_sprite(draw, panel_w)
 
-        draw.text((14, 44), 'B: toggle banner   Shift+B: close config   Enter: text edit mode', font=body_font, fill=(184, 204, 224, 255))
+        draw.text((14, 44), 'Shift+B: toggle banner   Ctrl+B: close config   Enter: text edit mode', font=body_font, fill=(184, 204, 224, 255))
         draw.text((14, 64), 'Left/Right: speed   Up/Down: font   Ctrl+C: beat color   Ctrl+R: reset text', font=body_font, fill=(184, 204, 224, 255))
         draw.text((14, 84), 'Shift+Enter: new line   Backspace: delete   Tab: spaces', font=body_font, fill=(184, 204, 224, 255))
 

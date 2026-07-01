@@ -12,7 +12,7 @@ Troubleshooting guide for banner rendering, editing, and persistence behavior.
 
 ### Text typing triggers global hotkeys
 
-- Ensure config modal is open (`Shift+B`) and edit mode is enabled (`Enter`).
+- Ensure config modal is open (`Ctrl+B`) and edit mode is enabled (`Enter`).
 - Verify latest `banner-01` and `unicorn-tears-01` are pulled if `U` triggers
   splash instead of text input.
 
