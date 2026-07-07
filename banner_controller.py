@@ -163,6 +163,20 @@ void main() {
 
         self._restore_runtime_state()
 
+        try:
+            vj = self._vj_api
+            vj.register_midi_actions('Banner', [
+                ('banner_toggle', 'Toggle scroll banner'),
+            ])
+            vj.register_midi_action_handler('banner_toggle', self._midi_toggle)
+        except Exception as exc:
+            import logging  # noqa: PLC0415
+            logging.getLogger(__name__).debug('banner-01: MIDI registration failed: %s', exc)
+
+    def _midi_toggle(self) -> None:
+        """MIDI handler: toggle the banner on/off."""
+        self._enabled = not self._enabled
+
     # ── Text field operations ────────────────────────────────────────────────
 
     def _tf_sel_range(self) -> tuple[int, int] | None:
