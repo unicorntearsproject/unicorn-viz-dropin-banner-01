@@ -9,6 +9,8 @@ Shift-selection, Backspace/Delete/Ctrl+Backspace, Ctrl+A.
 """
 from __future__ import annotations
 
+__version__ = '0.8.0'
+
 import logging
 import math
 from dataclasses import dataclass

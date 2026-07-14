@@ -1,5 +1,8 @@
 # banner-01 — Bottom Marquee Banner
 
+**Version 0.8.0**
+
+
 A subsystem drop-in for unicorn-viz that renders a full-width bottom marquee with
 runtime configuration and text editing.
 
@@ -56,3 +59,7 @@ State is persisted to the app's shared runtime state file (`banner` key in
 - docs/configuration.md
 - docs/integration.md
 - docs/troubleshooting.md
+
+## Changelog
+
+- **0.8.0** — initial versioned release.
