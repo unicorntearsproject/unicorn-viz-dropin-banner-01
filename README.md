@@ -1,6 +1,6 @@
 # banner-01 — Bottom Marquee Banner
 
-**Version 0.8.0**
+**Version 0.8.1**
 
 
 A subsystem drop-in for unicorn-viz that renders a full-width bottom marquee with
@@ -62,4 +62,5 @@ State is persisted to the app's shared runtime state file (`banner` key in
 
 ## Changelog
 
+- **0.8.1** — fonts now resolve through the shared `unicornviz.fonts` resolver (bundled ui-font.ttf first, then per-platform system dirs including Windows) — fixes tiny bitmap-font fallback on Windows.
 - **0.8.0** — initial versioned release.

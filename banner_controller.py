@@ -9,19 +9,17 @@ Shift-selection, Backspace/Delete/Ctrl+Backspace, Ctrl+A.
 """
 from __future__ import annotations
 
-__version__ = '0.8.0'
+__version__ = '0.8.1'
 
 import logging
 import math
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import moderngl
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from unicornviz.paths import resolve_path
 
 log = logging.getLogger(__name__)
 
@@ -49,13 +47,6 @@ _DEFAULT_TEXT = (
     'free!  Please help us grow - like, share & Follow!  Monthly subscribers '
     'get early access to music, videos & software!'
 )
-
-_FONT_CANDIDATES = [
-    resolve_path('assets/fonts/ui-font.ttf'),
-    Path('/usr/share/fonts/adobe-source-code-pro-fonts/SourceCodePro-Medium.otf'),
-    Path('/usr/share/fonts/google-noto-vf/NotoSansMono[wght].ttf'),
-    Path('/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf'),
-]
 
 
 @dataclass(slots=True)
@@ -321,13 +312,10 @@ void main() {
         self._banner_height = self._compute_banner_height()
 
     def _load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-        for path in _FONT_CANDIDATES:
-            try:
-                if path.exists():
-                    return ImageFont.truetype(str(path), size=size)
-            except Exception:
-                continue
-        return ImageFont.load_default()
+        # Shared resolver: bundled ui-font.ttf first, then per-platform
+        # system dirs (incl. Windows) — see unicornviz/fonts.py.
+        from unicornviz.fonts import load_font
+        return load_font(size)
 
     def _compute_banner_height(self) -> int:
         test = Image.new('RGBA', (8, 8), (0, 0, 0, 0))
