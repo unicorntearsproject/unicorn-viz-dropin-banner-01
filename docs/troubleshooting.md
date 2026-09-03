@@ -2,7 +2,7 @@
 
 Owner: Drop-in Maintainers
 Status: active
-Last updated: 2026-09-17
+Last updated: 2026-09-24
 
 ## Purpose
 
@@ -31,12 +31,29 @@ Troubleshooting guide for banner rendering, editing, and persistence behavior.
 
 - Use shorter lines or newline breaks.
 - Reduce `font_px` with Down arrow while config is open.
+- A too-long line scrolls horizontally to keep the cursor visible rather
+  than wrapping (0.10.0+) -- this is expected, not clipping.
 
 ### Typed text stops accepting characters partway through a line
 
 - Expected: each line is hard-capped at `max_line_chars` (100 by default)
-  while typing. Press `Enter`/`Shift+Enter` to continue on a new line, or
-  raise the cap with `Right` in the config modal (not editing).
+  while typing. The field's border flashes red for an instant when this
+  happens (0.10.0+) -- press `Enter`/`Shift+Enter` to continue on a new
+  line, or raise the cap with `Right` in the config modal (not editing).
+
+### Holding Backspace/Delete/an arrow key doesn't repeat
+
+- Fixed in core (unrelated to the `banner-01` version) -- `unicornviz/
+  app.py`'s key dispatch drops all `SDL_KEYDOWN` auto-repeat by design
+  (so holding an ordinary hotkey doesn't repeat-fire it), but now lets
+  repeats through whenever some drop-in's text editor has focus. Verify
+  core is current if this still doesn't repeat.
+
+### Selection doesn't seem to do anything
+
+- Before 0.10.0, Shift+move updated the internal selection but nothing
+  drew it -- selecting genuinely worked, it just wasn't visible. Now
+  highlighted; verify latest `banner-01` if it still isn't.
 
 ## Related Docs
 

@@ -2,7 +2,7 @@
 
 Owner: Drop-in Maintainers
 Status: active
-Last updated: 2026-09-17
+Last updated: 2026-09-24
 
 ## Purpose
 
@@ -20,9 +20,14 @@ Operational runbook for the banner subsystem during live sessions.
 - `Shift+B`: toggle banner strip
 - `Ctrl+B`: open/close config
 - `Enter`: toggle edit mode
-- `Shift+Enter`: insert newline
-- `Left`/`Right`: decrease/increase max line length (chars)
+- `Left`/`Right`: decrease/increase max line length (chars, not editing)
 - `Esc`: close config modal
+
+While editing (see README.md for the full list): `↑↓←→`/`Home`/`End` move the
+cursor (`Home`/`End` scoped to the current line, `Ctrl+Home`/`Ctrl+End` to all
+the text), `Shift` + any of those selects, `Ctrl+A/C/X/V` select-all/copy/
+cut/paste, `Backspace`/`Delete` delete (repeats while held), `Shift+Enter`
+inserts a newline.
 
 ## Runtime Notes
 
@@ -32,6 +37,9 @@ Operational runbook for the banner subsystem during live sessions.
 - Text animation (drippy vertical wave) and color both react to bass/beat;
   neither depends on frame-perfect timing the way the old scroll did, so a
   dropped frame doesn't read as a stutter.
+- The editor is one row on screen per logical line (no separate pixel
+  soft-wrap layer) -- a too-long line scrolls horizontally to keep the
+  cursor visible rather than wrapping.
 - In multi-head span/mirror modes, banner targets the primary overlay viewport.
 - Edit mode owns plain text keys to avoid accidental global hotkey firing.
 

@@ -12,12 +12,17 @@ dropped or delayed frame just means the fade fraction is slightly behind
 where it "should" be, not a visible stutter in position.
 
 Text editing uses SDL_TEXTINPUT events (via VJApi.register_text_input_handler)
-and supports full cursor navigation: arrow keys, Home/End, Ctrl+Arrow word-jump,
-Shift-selection, Backspace/Delete/Ctrl+Backspace, Ctrl+A.
+and behaves like an ordinary textarea: full cursor navigation (arrow keys,
+Home/End/Up/Down scoped to the current logical line, Ctrl+Home/End for the
+whole text, Ctrl+Arrow word-jump), a visible Shift-selection highlight,
+Ctrl+A/C/X/V, and Backspace/Delete/Ctrl+Backspace. One row on screen per
+logical line -- max_line_chars is the editable unit, not a separate
+pixel-wrapped display layer -- with horizontal scroll-follow instead of
+wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.9.0'
+__version__ = '0.10.0'
 
 import logging
 import math
@@ -40,13 +45,16 @@ DROPIN_CAPABILITIES = {
 }
 
 HELP_ENTRIES = [
-    ('Banner', 'Shift+B',     'Toggle bottom marquee banner on/off'),
-    ('Banner', 'Ctrl+B',      'Toggle banner config modal'),
-    ('Banner', 'Ctrl+R',      'Reset banner text to default (in config modal)'),
-    ('Banner', 'Arrows',      'Adjust max line length/font while config modal is open'),
-    ('Banner', 'Enter',       'Toggle live text edit mode in config modal'),
-    ('Banner', '←→ Home/End', 'Move cursor while editing'),
-    ('Banner', 'Ctrl+←→',    'Jump word while editing'),
+    ('Banner', 'Shift+B',       'Toggle bottom marquee banner on/off'),
+    ('Banner', 'Ctrl+B',        'Toggle banner config modal'),
+    ('Banner', 'Ctrl+R',        'Reset banner text to default (in config modal)'),
+    ('Banner', 'Arrows',        'Adjust max line length/font while config modal is open'),
+    ('Banner', 'Enter',         'Toggle live text edit mode in config modal'),
+    ('Banner', '↑↓←→ Home/End', 'Move cursor while editing (Home/End: current line)'),
+    ('Banner', 'Ctrl+Home/End', 'Jump to start/end of all text while editing'),
+    ('Banner', 'Ctrl+←→',      'Jump word while editing'),
+    ('Banner', 'Shift + move',  'Select text while editing'),
+    ('Banner', 'Ctrl+A/C/X/V',  'Select all / copy / cut / paste while editing'),
 ]
 
 # Fade timing for the multi-line cycle -- fixed, not config-exposed (unlike
@@ -131,6 +139,11 @@ class BannerController:
         # holding, fading out, then advancing -- see _current_line_fade().
         self._line_idx = 0
         self._line_cycle_t = 0.0
+
+        # Brief red border flash when a keystroke is rejected for being at
+        # the per-line cap -- otherwise hitting the cap is silent and reads
+        # as the editor randomly dropping input. Decayed in update().
+        self._cap_flash_t = 0.0
 
         self._bass = 0.0
         self._mid = 0.0
@@ -241,15 +254,19 @@ void main() {
         remainder_len = line_end - p
         line_len = line_end - line_start
         capped: list[str] = []
+        rejected = False
         for ch in clean:
             if ch == '\n':
                 capped.append(ch)
                 line_len = remainder_len
                 continue
             if line_len >= self._max_line_chars:
+                rejected = True
                 continue
             capped.append(ch)
             line_len += 1
+        if rejected:
+            self._cap_flash_t = 0.35
         result = ''.join(capped)
         if not result:
             return
@@ -289,11 +306,45 @@ void main() {
             self._tf_set_cursor(self._cursor + 1, select)
 
     def _tf_move_home(self, select: bool = False) -> None:
-        # Home goes to start of current visual line (or start of text)
-        self._tf_set_cursor(0, select)
+        """Move to the start of the current logical (real-\\n-delimited)
+        line -- that's the editable unit now, one row on screen per line."""
+        line_start = self._text.rfind('\n', 0, self._cursor) + 1
+        self._tf_set_cursor(line_start, select)
 
     def _tf_move_end(self, select: bool = False) -> None:
+        line_end = self._text.find('\n', self._cursor)
+        if line_end == -1:
+            line_end = len(self._text)
+        self._tf_set_cursor(line_end, select)
+
+    def _tf_move_doc_home(self, select: bool = False) -> None:
+        self._tf_set_cursor(0, select)
+
+    def _tf_move_doc_end(self, select: bool = False) -> None:
         self._tf_set_cursor(len(self._text), select)
+
+    def _tf_move_up(self, select: bool = False) -> None:
+        line_start = self._text.rfind('\n', 0, self._cursor) + 1
+        col = self._cursor - line_start
+        if line_start == 0:
+            self._tf_set_cursor(0, select)
+            return
+        prev_end = line_start - 1   # the '\n' that separates this line from the prior one
+        prev_start = self._text.rfind('\n', 0, prev_end) + 1
+        self._tf_set_cursor(prev_start + min(col, prev_end - prev_start), select)
+
+    def _tf_move_down(self, select: bool = False) -> None:
+        line_start = self._text.rfind('\n', 0, self._cursor) + 1
+        col = self._cursor - line_start
+        line_end = self._text.find('\n', self._cursor)
+        if line_end == -1:
+            self._tf_set_cursor(len(self._text), select)
+            return
+        next_start = line_end + 1
+        next_end = self._text.find('\n', next_start)
+        if next_end == -1:
+            next_end = len(self._text)
+        self._tf_set_cursor(next_start + min(col, next_end - next_start), select)
 
     def _tf_move_word_left(self, select: bool = False) -> None:
         pos = self._cursor
@@ -315,6 +366,30 @@ void main() {
     def _tf_select_all(self) -> None:
         self._sel_start = 0
         self._cursor = len(self._text)
+
+    def _tf_selected_text(self) -> str:
+        r = self._tf_sel_range()
+        if r is None:
+            return ''
+        lo, hi = r
+        return self._text[lo:hi]
+
+    def _clipboard_get(self) -> str:
+        import sdl2  # noqa: PLC0415
+        try:
+            raw = sdl2.SDL_GetClipboardText()
+        except Exception:
+            return ''
+        if not raw:
+            return ''
+        return raw.decode('utf-8', errors='replace') if isinstance(raw, bytes) else str(raw)
+
+    def _clipboard_set(self, text: str) -> None:
+        import sdl2  # noqa: PLC0415
+        try:
+            sdl2.SDL_SetClipboardText(text.encode('utf-8'))
+        except Exception:
+            pass
 
     # ── Edit mode lifecycle ──────────────────────────────────────────────────
 
@@ -478,12 +553,20 @@ void main() {
                 self._tf_move_word_right(select=shift) if ctrl else self._tf_move_right(select=shift)
                 return None
 
+            if sym == sdl2.SDLK_UP:
+                self._tf_move_up(select=shift)
+                return None
+
+            if sym == sdl2.SDLK_DOWN:
+                self._tf_move_down(select=shift)
+                return None
+
             if sym == sdl2.SDLK_HOME:
-                self._tf_move_home(select=shift)
+                self._tf_move_doc_home(select=shift) if ctrl else self._tf_move_home(select=shift)
                 return None
 
             if sym == sdl2.SDLK_END:
-                self._tf_move_end(select=shift)
+                self._tf_move_doc_end(select=shift) if ctrl else self._tf_move_end(select=shift)
                 return None
 
             if sym == sdl2.SDLK_BACKSPACE:
@@ -498,6 +581,27 @@ void main() {
 
             if sym == sdl2.SDLK_a and ctrl:
                 self._tf_select_all()
+                return None
+
+            if sym == sdl2.SDLK_c and ctrl:
+                selected = self._tf_selected_text()
+                if selected:
+                    self._clipboard_set(selected)
+                return None
+
+            if sym == sdl2.SDLK_x and ctrl:
+                selected = self._tf_selected_text()
+                if selected:
+                    self._clipboard_set(selected)
+                    self._tf_delete_selection()
+                    self._persist_runtime_state()
+                return None
+
+            if sym == sdl2.SDLK_v and ctrl:
+                pasted = self._clipboard_get()
+                if pasted:
+                    self._tf_insert(pasted)
+                    self._persist_runtime_state()
                 return None
 
             if sym == sdl2.SDLK_r and ctrl:
@@ -590,6 +694,8 @@ void main() {
         # Drippy per-character wave speed rides bass/beat -- a quiet passage
         # barely moves, a hit makes it visibly ooze.
         self._drip_phase += dt * (1.15 + self._bass * 2.4 + self._beat * 1.6)
+        if self._cap_flash_t > 0.0:
+            self._cap_flash_t = max(0.0, self._cap_flash_t - dt)
 
     def _current_line_fade(self) -> tuple[str, float]:
         """Return (line_text, fade_fraction in [0, 1]) for the active line."""
@@ -739,8 +845,12 @@ void main() {
         self._draw_config_sprite(draw, panel_w)
 
         draw.text((14, 44), 'Shift+B: toggle banner   Ctrl+B: close config   Enter: text edit mode',      font=body_font, fill=(184, 204, 224, 255))
-        draw.text((14, 64), 'Left/Right: max line length   Up/Down: font   Ctrl+R: reset text',           font=body_font, fill=(184, 204, 224, 255))
-        draw.text((14, 84), '← → Home/End Ctrl+← word  Backspace/Del  Shift+Enter newline  Ctrl+A all', font=body_font, fill=(184, 204, 224, 255))
+        if self._edit_mode:
+            draw.text((14, 64), '↑↓←→/Home/End: move   Shift+move: select   Ctrl+A: select all',          font=body_font, fill=(184, 204, 224, 255))
+            draw.text((14, 84), 'Ctrl+C/X/V: copy/cut/paste   Shift+Enter: newline   Ctrl+R: reset text', font=body_font, fill=(184, 204, 224, 255))
+        else:
+            draw.text((14, 64), 'Left/Right: max line length   Up/Down: font   Ctrl+R: reset text',       font=body_font, fill=(184, 204, 224, 255))
+            draw.text((14, 84), 'Enter to start editing text below',                                       font=body_font, fill=(184, 204, 224, 255))
 
         edit_state = 'EDITING' if self._edit_mode else 'VIEW'
         edit_color = (255, 214, 110, 255) if self._edit_mode else (176, 196, 220, 255)
@@ -798,54 +908,52 @@ void main() {
         bbox = draw.textbbox((0, 0), 'Ag', font=font)
         return max(16, int(bbox[3] - bbox[1]))
 
-    def _wrap_to_width(
-        self,
-        draw: 'ImageDraw.ImageDraw',
-        text: str,
-        font: 'ImageFont.ImageFont',
-        max_width: int,
-    ) -> list[str]:
-        if max_width <= 8:
-            return [text]
+    def _fit_end(
+        self, draw: 'ImageDraw.ImageDraw', font: 'ImageFont.ImageFont',
+        text: str, start: int, row_w: float,
+    ) -> int:
+        """Largest ``end >= start`` such that ``text[start:end]`` fits ``row_w`` px."""
+        n = len(text)
+        lo, hi = start, n
+        best = start
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if draw.textlength(text[start:mid], font=font) <= row_w:
+                best = mid
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        return best
 
-        def _break_long_word(word: str) -> list[str]:
-            chunks: list[str] = []
-            pending = ''
-            for ch in word:
-                candidate = pending + ch
-                if draw.textlength(candidate, font=font) <= max_width:
-                    pending = candidate
-                    continue
-                if pending:
-                    chunks.append(pending)
-                pending = ch
-            if pending:
-                chunks.append(pending)
-            return chunks or ['']
+    def _fit_start(
+        self, draw: 'ImageDraw.ImageDraw', font: 'ImageFont.ImageFont',
+        text: str, end: int, row_w: float,
+    ) -> int:
+        """Smallest ``start <= end`` such that ``text[start:end]`` fits ``row_w`` px."""
+        lo, hi = 0, end
+        best = end
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            if draw.textlength(text[mid:end], font=font) <= row_w:
+                best = mid
+                hi = mid - 1
+            else:
+                lo = mid + 1
+        return best
 
-        lines: list[str] = []
-        for raw in text.split('\n'):
-            paragraph = raw.rstrip('\r')
-            if not paragraph:
-                lines.append('')
-                continue
-            words = paragraph.split(' ')
-            current = ''
-            for word in words:
-                chunk = word if current == '' else f'{current} {word}'
-                if draw.textlength(chunk, font=font) <= max_width:
-                    current = chunk
-                    continue
-                if current:
-                    lines.append(current)
-                if draw.textlength(word, font=font) <= max_width:
-                    current = word
-                else:
-                    pieces = _break_long_word(word)
-                    lines.extend(pieces[:-1])
-                    current = pieces[-1]
-            lines.append(current)
-        return lines or ['']
+    def _row_window(
+        self, draw: 'ImageDraw.ImageDraw', font: 'ImageFont.ImageFont',
+        line_text: str, row_w: float, cursor_col: int,
+    ) -> tuple[int, int]:
+        """Char slice of ``line_text`` that fits ``row_w`` px, keeping
+        ``cursor_col`` visible -- horizontal scroll-follow for one row,
+        same idea as a single-line input, not a wrap."""
+        end0 = self._fit_end(draw, font, line_text, 0, row_w)
+        if cursor_col <= end0:
+            return 0, end0
+        start = self._fit_start(draw, font, line_text, cursor_col, row_w)
+        end = self._fit_end(draw, font, line_text, start, row_w)
+        return start, end
 
     def _draw_textarea(
         self,
@@ -859,7 +967,10 @@ void main() {
         x0, y0 = layout.x, layout.y
         x1, y1 = layout.x + layout.w, layout.y + layout.h
 
+        cap_flash = editing and self._cap_flash_t > 0.0
         border_col = (90, 200, 255, 255) if editing else (90, 146, 186, 255)
+        if cap_flash:
+            border_col = (235, 110, 90, 255)
         draw.rounded_rectangle(
             (x0, y0, x1, y1),
             radius=7,
@@ -878,58 +989,76 @@ void main() {
 
         inner_x   = x0 + layout.padding
         inner_y   = y0 + layout.padding
-        inner_w   = max(20, layout.w - layout.padding * 2)
+        row_w     = max(20.0, float(x1 - layout.padding - inner_x))
         line_h    = self._line_height(draw, font)
         vis_lines = max(1, layout.lines)
 
-        # Wrap text before cursor to find cursor's line index
-        before_cursor = value[:cursor]
-        lines_before  = self._wrap_to_width(draw, before_cursor, font, inner_w) if editing else []
-        cursor_line   = len(lines_before) - 1 if lines_before else 0
+        # Logical lines (real '\n' splits -- this *is* the editable unit
+        # now, one row on screen per line; no separate pixel soft-wrap).
+        lines = value.split('\n')
+        line_offsets: list[tuple[int, int]] = []
+        pos = 0
+        for ln in lines:
+            line_offsets.append((pos, pos + len(ln)))
+            pos += len(ln) + 1
 
-        # Wrap full text
-        all_lines = self._wrap_to_width(draw, value, font, inner_w)
+        cursor_line_idx = len(lines) - 1
+        for idx, (s, e) in enumerate(line_offsets):
+            if s <= cursor <= e:
+                cursor_line_idx = idx
+                break
 
-        # When editing, scroll so cursor line is visible
-        if editing and all_lines:
-            # The cursor line in all_lines: find it
-            total_lines = len(all_lines)
-            # Ensure cursor_line is clamped to available lines
-            cursor_line_abs = min(cursor_line, total_lines - 1)
-            # Compute scroll start so cursor is in last visible row
-            scroll_start = max(0, cursor_line_abs - vis_lines + 1)
+        total_lines = len(lines)
+        if editing:
+            # Cursor's row always becomes the top of the visible window,
+            # except once scrolled all the way to the last full page --
+            # this alone always keeps the cursor row in view, since
+            # max_scroll + vis_lines == total_lines.
+            scroll_start = max(0, min(cursor_line_idx, total_lines - vis_lines))
         else:
-            scroll_start = max(0, len(all_lines) - vis_lines)
+            scroll_start = max(0, total_lines - vis_lines)
 
-        shown = all_lines[scroll_start:scroll_start + vis_lines]
+        sel = self._tf_sel_range() if editing else None
         cursor_blink = editing and (int(self._color_phase * 2.0) % 2 == 0)
 
-        for idx, line in enumerate(shown):
-            yy  = inner_y + idx * line_h
-            abs_line = scroll_start + idx
+        for row in range(vis_lines):
+            li = scroll_start + row
+            if li >= total_lines:
+                break
+            line_text = lines[li]
+            ls, le = line_offsets[li]
+            yy = inner_y + row * line_h
+            is_cursor_row = editing and li == cursor_line_idx
+            cursor_col = (cursor - ls) if is_cursor_row else 0
 
-            # Determine if cursor is on this line and compute pixel x
-            if editing and cursor_blink and abs_line == min(cursor_line, len(all_lines) - 1):
-                # Measure text up to cursor on this line
-                if lines_before:
-                    last_before = lines_before[-1] if lines_before else ''
-                    cursor_px   = int(draw.textlength(last_before, font=font))
-                else:
-                    cursor_px = 0
-                # Draw text before cursor, then cursor bar, then text after
-                draw.text((inner_x, yy), line, font=font, fill=(232, 238, 246, 255))
+            if is_cursor_row:
+                w_start, w_end = self._row_window(draw, font, line_text, row_w, cursor_col)
+            else:
+                w_start, w_end = 0, self._fit_end(draw, font, line_text, 0, row_w)
+            visible = line_text[w_start:w_end]
+
+            if sel is not None:
+                sel_lo, sel_hi = sel
+                ov_lo = max(sel_lo, ls) - ls
+                ov_hi = min(sel_hi, le) - ls
+                vis_lo = max(ov_lo, w_start)
+                vis_hi = min(ov_hi, w_end)
+                if vis_lo < vis_hi:
+                    hx0 = inner_x + draw.textlength(line_text[w_start:vis_lo], font=font)
+                    hx1 = inner_x + draw.textlength(line_text[w_start:vis_hi], font=font)
+                    draw.rectangle((hx0, yy, hx1, yy + line_h), fill=(50, 130, 210, 130))
+
+            draw.text((inner_x, yy), visible, font=font, fill=(232, 238, 246, 255))
+
+            if is_cursor_row and cursor_blink:
+                cursor_px = draw.textlength(line_text[w_start:cursor_col], font=font)
                 cx = min(inner_x + cursor_px, x1 - layout.padding - 2)
                 draw.line([(cx, yy + 1), (cx, yy + line_h - 1)], fill=(0, 220, 255, 255), width=2)
-            else:
-                draw.text((inner_x, yy), line, font=font, fill=(232, 238, 246, 255))
 
         # Position indicator (e.g. "line 42/100 · 210/512")
         if editing:
-            line_start = value.rfind('\n', 0, cursor) + 1
-            line_end = value.find('\n', cursor)
-            if line_end == -1:
-                line_end = len(value)
-            line_len = line_end - line_start
+            ls, le = line_offsets[cursor_line_idx]
+            line_len = le - ls
             pos_text = f'line {line_len}/{self._max_line_chars} · {cursor} / {len(value)}'
             try:
                 pb = draw.textbbox((0, 0), pos_text, font=font)
