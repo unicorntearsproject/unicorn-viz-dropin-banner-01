@@ -1,7 +1,15 @@
 """Bottom-edge marquee banner overlay drop-in.
 
-Provides a stream-style scrolling text banner that can be toggled and configured
+Provides a stream-style bottom-edge banner that can be toggled and configured
 at runtime without modifying core overlay internals.
+
+0.9.0 replaced continuous horizontal scrolling with a multi-line, fade-cycled
+display: side-scrolling depended on a smooth, uninterrupted per-frame dt to
+track a pixel offset, which reads as visibly jittery under the same variable
+frame pacing a stream encode or CPU contention already produces elsewhere.
+Fading between whole, fixed lines has no such continuity requirement -- a
+dropped or delayed frame just means the fade fraction is slightly behind
+where it "should" be, not a visible stutter in position.
 
 Text editing uses SDL_TEXTINPUT events (via VJApi.register_text_input_handler)
 and supports full cursor navigation: arrow keys, Home/End, Ctrl+Arrow word-jump,
@@ -9,10 +17,11 @@ Shift-selection, Backspace/Delete/Ctrl+Backspace, Ctrl+A.
 """
 from __future__ import annotations
 
-__version__ = '0.8.1'
+__version__ = '0.9.0'
 
 import logging
 import math
+import textwrap
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,13 +43,25 @@ HELP_ENTRIES = [
     ('Banner', 'Shift+B',     'Toggle bottom marquee banner on/off'),
     ('Banner', 'Ctrl+B',      'Toggle banner config modal'),
     ('Banner', 'Ctrl+R',      'Reset banner text to default (in config modal)'),
-    ('Banner', 'Arrows',      'Adjust speed/font while config modal is open'),
+    ('Banner', 'Arrows',      'Adjust max line length/font while config modal is open'),
     ('Banner', 'Enter',       'Toggle live text edit mode in config modal'),
     ('Banner', '←→ Home/End', 'Move cursor while editing'),
     ('Banner', 'Ctrl+←→',    'Jump word while editing'),
 ]
 
-_DEFAULT_TEXT = (
+# Fade timing for the multi-line cycle -- fixed, not config-exposed (unlike
+# max_line_chars, which was the one explicitly asked to be tunable).
+_FADE_S = 1.0
+_LINE_HOLD_S = 2.6
+
+_DEFAULT_MAX_LINE_CHARS = 100
+_MIN_LINE_CHARS = 20
+_MAX_LINE_CHARS = 200
+
+# Flat prose, reflowed to the active max_line_chars by _wrap_to_chars() --
+# see _build_default_text() -- rather than hardcoded with line breaks, so a
+# lowered/raised max_line_chars still produces a sensible default on reset.
+_DEFAULT_TEXT_RAW = (
     'You are watching the Unicorn Tears Stream brought to you by DJ Tears, '
     'visualization by Unicorn-Viz.  Follow DJ Unicorn Tears on all your '
     'favorite platforms!  Visit UnicornTears.com to download Unicorn-Viz for '
@@ -62,7 +83,7 @@ class _TextAreaLayout:
 
 
 class BannerController:
-    """Render a configurable bottom-edge marquee strip over all effects.
+    """Render a configurable bottom-edge, fade-cycled banner strip over all effects.
 
     Text editing uses SDL_TEXTINPUT events registered via VJApi so character
     input is handled correctly regardless of keyboard layout, dead keys, or IME.
@@ -86,24 +107,30 @@ class BannerController:
         self._show_config = False
         self._edit_mode = False
 
-        self._text = str(self._cfg.get('text', _DEFAULT_TEXT) or _DEFAULT_TEXT).strip()
-        if not self._text:
-            self._text = _DEFAULT_TEXT
+        self._max_line_chars = int(self._cfg.get('max_line_chars', _DEFAULT_MAX_LINE_CHARS) or _DEFAULT_MAX_LINE_CHARS)
+        self._max_line_chars = max(_MIN_LINE_CHARS, min(_MAX_LINE_CHARS, self._max_line_chars))
 
-        self._scroll_speed = float(self._cfg.get('scroll_speed', 140.0) or 140.0)
+        self._text = str(self._cfg.get('text', '') or '').strip()
+        if not self._text:
+            self._text = self._build_default_text()
+        self._text = self._enforce_line_cap(self._text)
+
         self._font_px = int(self._cfg.get('font_px', 28) or 28)
         self._beat_color_enabled = bool(self._cfg.get('beat_color_enabled', True))
         self._alpha = float(self._cfg.get('alpha', 0.88) or 0.88)
 
-        self._scroll_speed = max(40.0, min(420.0, self._scroll_speed))
         self._font_px = max(16, min(56, self._font_px))
         self._alpha = max(0.35, min(1.0, self._alpha))
 
         self._pad_x = 14
         self._pad_y = 6
-        self._gap_px = 180
-        self._offset_px = 0.0
         self._color_phase = 0.0
+        self._drip_phase = 0.0
+
+        # Multi-line fade cycle: one line visible at a time, fading in,
+        # holding, fading out, then advancing -- see _current_line_fade().
+        self._line_idx = 0
+        self._line_cycle_t = 0.0
 
         self._bass = 0.0
         self._mid = 0.0
@@ -202,8 +229,33 @@ void main() {
         if not clean:
             return
         p = self._cursor
-        self._text = self._text[:p] + clean + self._text[p:]
-        self._cursor = p + len(clean)
+
+        # Hard-cap each line at max_line_chars as the operator types: a
+        # newline always goes through (it starts a fresh line), any other
+        # character is dropped once the line it would land on is already
+        # at the cap -- Enter/Shift+Enter is how you continue past it.
+        line_start = self._text.rfind('\n', 0, p) + 1
+        line_end = self._text.find('\n', p)
+        if line_end == -1:
+            line_end = len(self._text)
+        remainder_len = line_end - p
+        line_len = line_end - line_start
+        capped: list[str] = []
+        for ch in clean:
+            if ch == '\n':
+                capped.append(ch)
+                line_len = remainder_len
+                continue
+            if line_len >= self._max_line_chars:
+                continue
+            capped.append(ch)
+            line_len += 1
+        result = ''.join(capped)
+        if not result:
+            return
+
+        self._text = self._text[:p] + result + self._text[p:]
+        self._cursor = p + len(result)
 
     def _tf_delete_before(self) -> None:
         if self._tf_delete_selection():
@@ -294,14 +346,15 @@ void main() {
     def _apply_state_payload(self, raw: Any) -> None:
         if not isinstance(raw, dict):
             return
+        self._max_line_chars = max(
+            _MIN_LINE_CHARS,
+            min(_MAX_LINE_CHARS, int(raw.get('max_line_chars', self._max_line_chars) or self._max_line_chars)),
+        )
         text = str(raw.get('text', self._text) or self._text).strip()
         if text:
             self._text = text
+        self._text = self._enforce_line_cap(self._text)
         self._enabled = bool(raw.get('enabled', self._enabled))
-        self._scroll_speed = max(
-            40.0,
-            min(420.0, float(raw.get('scroll_speed', self._scroll_speed) or self._scroll_speed)),
-        )
         self._font_px = max(16, min(56, int(raw.get('font_px', self._font_px) or self._font_px)))
         self._beat_color_enabled = bool(raw.get('beat_color_enabled', self._beat_color_enabled))
         self._alpha = max(
@@ -310,6 +363,38 @@ void main() {
         )
         self._font = self._load_font(self._font_px)
         self._banner_height = self._compute_banner_height()
+
+    def _wrap_to_chars(self, text: str, width: int) -> list[str]:
+        """Word-wrap ``text`` to ``width`` characters per line (character
+        count, not pixel measurement -- max_line_chars is a character cap)."""
+        wrapped = textwrap.wrap(
+            text, width=max(1, width), break_long_words=True, break_on_hyphens=False,
+        )
+        return wrapped or ['']
+
+    def _build_default_text(self) -> str:
+        """Reflow the flat default prose to the current max_line_chars."""
+        return '\n'.join(self._wrap_to_chars(_DEFAULT_TEXT_RAW, self._max_line_chars))
+
+    def _enforce_line_cap(self, text: str) -> str:
+        """Rewrap any line in ``text`` exceeding max_line_chars.
+
+        Reflows rather than truncates so a lowered max_line_chars (or
+        config/state loaded from before this line got longer) never
+        silently drops content -- only live typing hard-caps (see
+        _tf_insert()), where the operator sees the cap in the moment.
+        """
+        out: list[str] = []
+        for line in text.split('\n'):
+            if len(line) <= self._max_line_chars:
+                out.append(line)
+            else:
+                out.extend(self._wrap_to_chars(line, self._max_line_chars))
+        return '\n'.join(out)
+
+    def _display_lines(self) -> list[str]:
+        """Return the non-blank lines that actually get displayed."""
+        return [ln for ln in self._text.split('\n') if ln.strip()]
 
     def _load_font(self, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
         # Shared resolver: bundled ui-font.ttf first, then per-platform
@@ -328,7 +413,7 @@ void main() {
         payload = {
             'enabled': bool(self._enabled),
             'text': str(self._text),
-            'scroll_speed': float(self._scroll_speed),
+            'max_line_chars': int(self._max_line_chars),
             'font_px': int(self._font_px),
             'beat_color_enabled': bool(self._beat_color_enabled),
             'alpha': float(self._alpha),
@@ -345,6 +430,15 @@ void main() {
         self._font_px = value
         self._font = self._load_font(self._font_px)
         self._banner_height = self._compute_banner_height()
+
+    def _set_max_line_chars(self, value: int) -> None:
+        value = max(_MIN_LINE_CHARS, min(_MAX_LINE_CHARS, int(value)))
+        if value == self._max_line_chars:
+            return
+        self._max_line_chars = value
+        # A lowered cap can leave existing lines over the new limit --
+        # reflow now rather than let it linger until the next edit/reload.
+        self._text = self._enforce_line_cap(self._text)
 
     # ── Key handler ──────────────────────────────────────────────────────────
 
@@ -407,7 +501,7 @@ void main() {
                 return None
 
             if sym == sdl2.SDLK_r and ctrl:
-                self._text = _DEFAULT_TEXT
+                self._text = self._build_default_text()
                 self._cursor = len(self._text)
                 self._sel_start = None
                 self._persist_runtime_state()
@@ -446,13 +540,13 @@ void main() {
             return 'Banner text edit: OFF'
 
         if sym == sdl2.SDLK_LEFT:
-            self._scroll_speed = max(40.0, self._scroll_speed - 10.0)
+            self._set_max_line_chars(self._max_line_chars - 10)
             self._persist_runtime_state()
-            return f'Banner speed: {self._scroll_speed:.0f}px/s'
+            return f'Banner max line: {self._max_line_chars}ch'
         if sym == sdl2.SDLK_RIGHT:
-            self._scroll_speed = min(420.0, self._scroll_speed + 10.0)
+            self._set_max_line_chars(self._max_line_chars + 10)
             self._persist_runtime_state()
-            return f'Banner speed: {self._scroll_speed:.0f}px/s'
+            return f'Banner max line: {self._max_line_chars}ch'
         if sym == sdl2.SDLK_UP:
             self._set_font_px(self._font_px + 1)
             self._persist_runtime_state()
@@ -466,7 +560,7 @@ void main() {
             self._persist_runtime_state()
             return f'Banner beat color: {"ON" if self._beat_color_enabled else "OFF"}'
         if sym == sdl2.SDLK_r and ctrl:
-            self._text = _DEFAULT_TEXT
+            self._text = self._build_default_text()
             self._cursor = len(self._text)
             self._sel_start = None
             self._persist_runtime_state()
@@ -482,9 +576,38 @@ void main() {
         self._treble = float(getattr(audio, 'treble_n', 0.0) or 0.0)
         self._beat   = float(getattr(audio, 'beat',     0.0) or 0.0)
 
+        dt = max(0.0, float(dt))
         if self._enabled:
-            self._offset_px += self._scroll_speed * max(0.0, float(dt))
-        self._color_phase += max(0.0, float(dt)) * (0.55 + self._mid * 1.4)
+            lines = self._display_lines()
+            if lines:
+                self._line_idx %= len(lines)
+                cycle_len = _FADE_S * 2.0 + _LINE_HOLD_S
+                self._line_cycle_t += dt
+                if self._line_cycle_t >= cycle_len:
+                    self._line_cycle_t -= cycle_len
+                    self._line_idx = (self._line_idx + 1) % len(lines)
+        self._color_phase += dt * (0.55 + self._mid * 1.4)
+        # Drippy per-character wave speed rides bass/beat -- a quiet passage
+        # barely moves, a hit makes it visibly ooze.
+        self._drip_phase += dt * (1.15 + self._bass * 2.4 + self._beat * 1.6)
+
+    def _current_line_fade(self) -> tuple[str, float]:
+        """Return (line_text, fade_fraction in [0, 1]) for the active line."""
+        lines = self._display_lines()
+        if not lines:
+            return '', 0.0
+        idx = self._line_idx % len(lines)
+        t = self._line_cycle_t
+        if t < _FADE_S:
+            frac = t / _FADE_S
+        elif t < _FADE_S + _LINE_HOLD_S:
+            frac = 1.0
+        else:
+            frac = 1.0 - (t - _FADE_S - _LINE_HOLD_S) / _FADE_S
+        frac = max(0.0, min(1.0, frac))
+        # Smoothstep -- a gentler ease than a linear ramp for a 1s fade.
+        frac = frac * frac * (3.0 - 2.0 * frac)
+        return lines[idx], frac
 
     def _current_text_color(self) -> tuple[int, int, int, int]:
         if not self._beat_color_enabled:
@@ -545,6 +668,38 @@ void main() {
 
     # ── Banner strip rendering ─────────────────────────────────────────────────
 
+    def _draw_drippy_text(
+        self,
+        draw: 'ImageDraw.ImageDraw',
+        x: float, y: float,
+        text: str,
+        color: tuple[int, int, int, int],
+        alpha: float,
+    ) -> float:
+        """Draw ``text`` character-by-character with a bass/beat-driven
+        vertical wave -- a "drippy" bob-and-sag instead of static glyphs.
+
+        Returns the total drawn width (for centering by the caller).
+        """
+        if alpha <= 0.0 or not text:
+            return 0.0
+        a = max(0, min(255, int(color[3] * alpha)))
+        col = (color[0], color[1], color[2], a)
+
+        # Base wobble is always faintly alive; bass widens the wave, beat
+        # adds an extra downward sag per character -- the "drip".
+        wave_amp = 1.4 + self._bass * 5.5
+        sag_amp = self._beat * 6.5
+
+        cx = x
+        for i, ch in enumerate(text):
+            cw = draw.textlength(ch, font=self._font)
+            wave = math.sin(self._drip_phase + i * 0.55) * wave_amp
+            sag = sag_amp * (0.5 + 0.5 * math.sin(self._drip_phase * 0.31 + i * 0.9))
+            draw.text((cx, y + wave + sag), ch, font=self._font, fill=col)
+            cx += cw
+        return cx - x
+
     def _build_banner_image(self, width: int) -> Image.Image:
         h = self._banner_height
         img  = Image.new('RGBA', (width, h), (0, 0, 0, 0))
@@ -554,19 +709,13 @@ void main() {
         draw.rectangle((0, 0, width, h), fill=(8, 10, 18, bg_alpha))
         draw.rectangle((0, 0, width, 2), fill=(70, 170, 255, min(255, bg_alpha + 20)))
 
-        measure     = draw.textlength(self._text, font=self._font)
-        measure_int = max(1, int(measure))
-        loop_w      = measure_int + self._gap_px
-        x0          = int(width - (self._offset_px % loop_w))
-
-        while x0 - loop_w + measure_int > 0:
-            x0 -= loop_w
-
-        color = self._current_text_color()
-        y = self._pad_y - 1
-        while x0 < width:
-            draw.text((x0, y), self._text, font=self._font, fill=color)
-            x0 += loop_w
+        line, fade = self._current_line_fade()
+        if line and fade > 0.0:
+            color = self._current_text_color()
+            text_w = draw.textlength(line, font=self._font)
+            x = max(float(self._pad_x), (width - text_w) / 2.0)
+            y = float(self._pad_y - 1)
+            self._draw_drippy_text(draw, x, y, line, color, fade)
         return img
 
     # ── Config modal rendering ─────────────────────────────────────────────────
@@ -584,13 +733,13 @@ void main() {
 
         draw.text((14, 10),  'BANNER CONFIG',                                            font=title_font, fill=(170, 220, 255, 255))
         draw.text((250, 12), f'Status: {"ON" if self._enabled else "OFF"}',              font=body_font,  fill=(230, 236, 246, 255))
-        draw.text((380, 12), f'Speed: {self._scroll_speed:.0f}px/s',                    font=body_font,  fill=(230, 236, 246, 255))
+        draw.text((380, 12), f'Max line: {self._max_line_chars}ch',                     font=body_font,  fill=(230, 236, 246, 255))
         draw.text((560, 12), f'Font: {self._font_px}px',                                font=body_font,  fill=(230, 236, 246, 255))
         draw.text((700, 12), f'Beat Color: {"ON" if self._beat_color_enabled else "OFF"}', font=body_font, fill=(230, 236, 246, 255))
         self._draw_config_sprite(draw, panel_w)
 
         draw.text((14, 44), 'Shift+B: toggle banner   Ctrl+B: close config   Enter: text edit mode',      font=body_font, fill=(184, 204, 224, 255))
-        draw.text((14, 64), 'Left/Right: speed   Up/Down: font   Ctrl+R: reset text',                     font=body_font, fill=(184, 204, 224, 255))
+        draw.text((14, 64), 'Left/Right: max line length   Up/Down: font   Ctrl+R: reset text',           font=body_font, fill=(184, 204, 224, 255))
         draw.text((14, 84), '← → Home/End Ctrl+← word  Backspace/Del  Shift+Enter newline  Ctrl+A all', font=body_font, fill=(184, 204, 224, 255))
 
         edit_state = 'EDITING' if self._edit_mode else 'VIEW'
@@ -774,9 +923,14 @@ void main() {
             else:
                 draw.text((inner_x, yy), line, font=font, fill=(232, 238, 246, 255))
 
-        # Position indicator (e.g. "42 / 512")
+        # Position indicator (e.g. "line 42/100 · 210/512")
         if editing:
-            pos_text = f'{cursor} / {len(value)}'
+            line_start = value.rfind('\n', 0, cursor) + 1
+            line_end = value.find('\n', cursor)
+            if line_end == -1:
+                line_end = len(value)
+            line_len = line_end - line_start
+            pos_text = f'line {line_len}/{self._max_line_chars} · {cursor} / {len(value)}'
             try:
                 pb = draw.textbbox((0, 0), pos_text, font=font)
                 draw.text(

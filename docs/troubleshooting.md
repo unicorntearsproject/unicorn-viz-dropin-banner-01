@@ -2,7 +2,7 @@
 
 Owner: Drop-in Maintainers
 Status: active
-Last updated: 2026-06-16
+Last updated: 2026-09-17
 
 ## Purpose
 
@@ -31,6 +31,12 @@ Troubleshooting guide for banner rendering, editing, and persistence behavior.
 
 - Use shorter lines or newline breaks.
 - Reduce `font_px` with Down arrow while config is open.
+
+### Typed text stops accepting characters partway through a line
+
+- Expected: each line is hard-capped at `max_line_chars` (100 by default)
+  while typing. Press `Enter`/`Shift+Enter` to continue on a new line, or
+  raise the cap with `Right` in the config modal (not editing).
 
 ## Related Docs
 
