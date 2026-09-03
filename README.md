@@ -1,6 +1,6 @@
 # banner-01 — Bottom Marquee Banner
 
-**Version 0.10.0**
+**Version 0.10.1**
 
 
 A subsystem drop-in for unicorn-viz that renders a full-width bottom banner with
@@ -34,7 +34,7 @@ While the config modal is open but **not** editing:
 
 - `Left/Right`: decrease/increase max line length
 - `Up/Down`: decrease/increase font size
-- `Ctrl+R`: reset text to default
+- `Ctrl+R`: reset text and max line length to default
 
 While **editing** text (works like a normal textarea):
 
@@ -48,7 +48,7 @@ While **editing** text (works like a normal textarea):
   if any); `Ctrl+Backspace`: delete the previous word. All repeat while held.
 - `Shift+Enter`: insert a newline; `Enter` alone: exit edit mode
 - `Tab`: insert spaces
-- `Ctrl+R`: reset text to default
+- `Ctrl+R`: reset text and max line length to default
 
 ## Config
 
@@ -80,6 +80,13 @@ State is persisted to the app's shared runtime state file (`banner` key in
 - docs/troubleshooting.md
 
 ## Changelog
+
+- **0.10.1** — `Ctrl+R` now also resets `max_line_chars` back to the
+  default (100), not just the text. Previously, lowering it (`Left` in the
+  config modal, 8 presses from 100 down to the 20 floor) had no way back
+  except manually pressing `Right` the same number of times -- surfaced
+  live when a session's persisted `max_line_chars` had drifted down to 20
+  and "reset text to default" didn't touch it.
 
 - **0.10.0** — The text editor now actually behaves like a textarea, fixing
   three concrete complaints from real use:

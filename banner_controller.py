@@ -22,7 +22,7 @@ wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.10.0'
+__version__ = '0.10.1'
 
 import logging
 import math
@@ -47,7 +47,7 @@ DROPIN_CAPABILITIES = {
 HELP_ENTRIES = [
     ('Banner', 'Shift+B',       'Toggle bottom marquee banner on/off'),
     ('Banner', 'Ctrl+B',        'Toggle banner config modal'),
-    ('Banner', 'Ctrl+R',        'Reset banner text to default (in config modal)'),
+    ('Banner', 'Ctrl+R',        'Reset banner text and max line length to default'),
     ('Banner', 'Arrows',        'Adjust max line length/font while config modal is open'),
     ('Banner', 'Enter',         'Toggle live text edit mode in config modal'),
     ('Banner', '↑↓←→ Home/End', 'Move cursor while editing (Home/End: current line)'),
@@ -605,11 +605,12 @@ void main() {
                 return None
 
             if sym == sdl2.SDLK_r and ctrl:
+                self._max_line_chars = _DEFAULT_MAX_LINE_CHARS
                 self._text = self._build_default_text()
                 self._cursor = len(self._text)
                 self._sel_start = None
                 self._persist_runtime_state()
-                return 'Banner text reset'
+                return 'Banner text + max line reset'
 
             # Consume everything else (including ctrl/alt combos) while editing
             # so character keys delivered via SDL_TEXTINPUT are not double-fired.
@@ -664,11 +665,12 @@ void main() {
             self._persist_runtime_state()
             return f'Banner beat color: {"ON" if self._beat_color_enabled else "OFF"}'
         if sym == sdl2.SDLK_r and ctrl:
+            self._max_line_chars = _DEFAULT_MAX_LINE_CHARS
             self._text = self._build_default_text()
             self._cursor = len(self._text)
             self._sel_start = None
             self._persist_runtime_state()
-            return 'Banner text reset'
+            return 'Banner text + max line reset'
 
         return True
 
@@ -849,7 +851,7 @@ void main() {
             draw.text((14, 64), '↑↓←→/Home/End: move   Shift+move: select   Ctrl+A: select all',          font=body_font, fill=(184, 204, 224, 255))
             draw.text((14, 84), 'Ctrl+C/X/V: copy/cut/paste   Shift+Enter: newline   Ctrl+R: reset text', font=body_font, fill=(184, 204, 224, 255))
         else:
-            draw.text((14, 64), 'Left/Right: max line length   Up/Down: font   Ctrl+R: reset text',       font=body_font, fill=(184, 204, 224, 255))
+            draw.text((14, 64), 'Left/Right: max line length   Up/Down: font   Ctrl+R: reset text/line length', font=body_font, fill=(184, 204, 224, 255))
             draw.text((14, 84), 'Enter to start editing text below',                                       font=body_font, fill=(184, 204, 224, 255))
 
         edit_state = 'EDITING' if self._edit_mode else 'VIEW'
