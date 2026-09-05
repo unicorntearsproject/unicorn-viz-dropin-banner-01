@@ -22,7 +22,7 @@ wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.10.1'
+__version__ = '0.11.0'
 
 import logging
 import math
@@ -205,6 +205,66 @@ void main() {
         except Exception as exc:
             import logging  # noqa: PLC0415
             logging.getLogger(__name__).debug('banner-01: MIDI registration failed: %s', exc)
+        # Control Room panel (docs/planning/control-room-drop-in-integration-
+        # plan-2026-09-05.md, P1); guarded so an older core just gets no panel.
+        register = getattr(self._vj_api, 'register_operator_panel', None)
+        if callable(register):
+            try:
+                from unicornviz.operator_panels import OperatorPanel  # noqa: PLC0415
+                register(OperatorPanel(
+                    name='banner',
+                    title='Banner',
+                    page='overlays',
+                    priority=310,
+                    size='small',
+                    content=self._operator_panel_content,
+                    on_action=self._operator_panel_action,
+                    tooltips={
+                        'toggle': 'Show / hide the bottom banner',
+                        'edit': 'Open the banner config modal on the audience window',
+                        'reset': 'Reset banner text and max line length to default',
+                    },
+                ))
+            except Exception as exc:
+                import logging  # noqa: PLC0415
+                logging.getLogger(__name__).debug('banner-01: operator panel registration failed: %s', exc)
+
+    def _operator_panel_content(self) -> Any:
+        """Control Room panel state -- CR render thread; attribute reads only."""
+        from unicornviz.operator_panels import PanelButton, PanelContent, PanelRow  # noqa: PLC0415
+        on = bool(self._enabled)
+        return PanelContent(
+            status='ON' if on else 'OFF',
+            rows=(
+                PanelRow('Lines', str(len(self._display_lines()))),
+                PanelRow('Max line', f'{self._max_line_chars}ch'),
+                PanelRow('Font', f'{self._font_px}px'),
+                PanelRow('Beat color', 'on' if self._beat_color_enabled else 'off'),
+            ),
+            buttons=(
+                PanelButton('toggle', 'TOGGLE', active=on),
+                PanelButton('edit', 'EDIT', active=self._show_config),
+                PanelButton('reset', 'RESET', accent='warn'),
+            ),
+        )
+
+    def _operator_panel_action(self, action: str, _payload: Any) -> str | None:
+        """Control Room buttons -> the same state changes and flash text as the hotkeys."""
+        if action == 'toggle':
+            self._enabled = not self._enabled
+            self._persist_runtime_state()
+            return f'Banner: {"ON" if self._enabled else "OFF"}'
+        if action == 'edit':
+            self._show_config = True
+            return 'Banner config: ON'
+        if action == 'reset':
+            self._max_line_chars = _DEFAULT_MAX_LINE_CHARS
+            self._text = self._build_default_text()
+            self._cursor = len(self._text)
+            self._sel_start = None
+            self._persist_runtime_state()
+            return 'Banner text + max line reset'
+        return None
 
     def _midi_toggle(self) -> None:
         """MIDI handler: toggle the banner on/off."""
@@ -1120,6 +1180,13 @@ void main() {
             self._draw_texture(self._modal_tex, x, y, float(mw), float(mh), canvas_w, canvas_h)
 
     def shutdown(self) -> None:
+        # Drop the Control Room panel first (operator_panels.py "Lifecycle").
+        unregister = getattr(self._vj_api, 'unregister_operator_panel', None)
+        if callable(unregister):
+            try:
+                unregister('banner')
+            except Exception:
+                pass
         self._exit_edit_mode()
         for tex in (self._banner_tex, self._modal_tex, self._white_tex):
             if tex is not None:

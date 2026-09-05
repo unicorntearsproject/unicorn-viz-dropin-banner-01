@@ -1,6 +1,6 @@
 # banner-01 — Bottom Marquee Banner
 
-**Version 0.10.1**
+**Version 0.11.0**
 
 
 A subsystem drop-in for unicorn-viz that renders a full-width bottom banner with
@@ -81,6 +81,7 @@ State is persisted to the app's shared runtime state file (`banner` key in
 
 ## Changelog
 
+- **0.11.0** — Control Room panel (P1 of `docs/planning/control-room-drop-in-integration-plan-2026-09-05.md`): registered on the shared **OVERLAYS** page — line count, max line length, font size, beat color, and TOGGLE / EDIT (opens the audience-window config modal) / RESET buttons mirroring `Shift+B` / `Ctrl+B` / `Ctrl+R`. Unregistered in `shutdown()`.
 - **0.10.1** — `Ctrl+R` now also resets `max_line_chars` back to the
   default (100), not just the text. Previously, lowering it (`Left` in the
   config modal, 8 presses from 100 down to the 20 floor) had no way back
