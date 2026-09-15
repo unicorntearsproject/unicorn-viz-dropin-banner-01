@@ -22,7 +22,7 @@ wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.12.0'
+__version__ = '0.13.0'
 
 import logging
 import math
@@ -47,6 +47,7 @@ DROPIN_CAPABILITIES = {
 HELP_ENTRIES = [
     ('Banner', 'Shift+B',       'Toggle bottom marquee banner on/off'),
     ('Banner', 'Ctrl+B',        'Toggle banner config modal'),
+    ('Banner', 'Alt+D',         'Toggle drippy wave animation (config modal open)'),
     ('Banner', 'Ctrl+R',        'Reset banner text and max line length to default'),
     ('Banner', 'Arrows',        'Adjust max line length/font while config modal is open'),
     ('Banner', 'Enter',         'Toggle live text edit mode in config modal'),
@@ -65,6 +66,14 @@ _LINE_HOLD_S = 2.6
 _DEFAULT_MAX_LINE_CHARS = 100
 _MIN_LINE_CHARS = 20
 _MAX_LINE_CHARS = 200
+
+# Quantization for the render cache in render_overlay(): the fade fraction
+# and beat-driven text color are continuous every frame, so a raw equality
+# check would never hit. Collapsing them into coarse, visually-imperceptible
+# buckets means a held or slowly-fading line reuses one rasterized banner
+# across many frames instead of rebuilding on every one.
+_FADE_QUANT_STEPS = 48
+_COLOR_QUANT_STEP = 8
 
 # Flat prose, reflowed to the active max_line_chars by _wrap_to_chars() --
 # see _build_default_text() -- rather than hardcoded with line breaks, so a
@@ -127,6 +136,10 @@ class BannerController:
 
         self._font_px = int(self._cfg.get('font_px', 28) or 28)
         self._beat_color_enabled = bool(self._cfg.get('beat_color_enabled', True))
+        # Off by default -- the per-character wave/sag is also the one thing
+        # that forces a full rebuild every frame (see _banner_cache_key in
+        # render_overlay()); most operators want the static, cheap banner.
+        self._drip_enabled = bool(self._cfg.get('drip_enabled', False))
         self._alpha = float(self._cfg.get('alpha', 0.88) or 0.88)
 
         self._font_px = max(16, min(56, self._font_px))
@@ -155,6 +168,13 @@ class BannerController:
         # Cursor / selection state for text edit mode
         self._cursor: int = len(self._text)
         self._sel_start: int | None = None
+
+        # Rasterized-banner cache -- see render_overlay(). None whenever the
+        # drip animation is on (it changes every frame by design, so there's
+        # nothing to cache); otherwise the key the current GL texture's
+        # content was built from, so an unchanged frame skips both the PIL
+        # rasterize and the texture upload entirely.
+        self._banner_cache_key: tuple | None = None
 
         self._font = self._load_font(self._font_px)
         self._banner_height = self._compute_banner_height()
@@ -494,6 +514,7 @@ void main() {
         self._enabled = bool(raw.get('enabled', self._enabled))
         self._font_px = max(16, min(56, int(raw.get('font_px', self._font_px) or self._font_px)))
         self._beat_color_enabled = bool(raw.get('beat_color_enabled', self._beat_color_enabled))
+        self._drip_enabled = bool(raw.get('drip_enabled', self._drip_enabled))
         self._alpha = max(
             0.35,
             min(1.0, float(raw.get('alpha', self._alpha) or self._alpha)),
@@ -553,6 +574,7 @@ void main() {
             'max_line_chars': int(self._max_line_chars),
             'font_px': int(self._font_px),
             'beat_color_enabled': bool(self._beat_color_enabled),
+            'drip_enabled': bool(self._drip_enabled),
             'alpha': float(self._alpha),
         }
         self._vj_api.set_runtime_state('banner', payload)
@@ -726,6 +748,10 @@ void main() {
             self._beat_color_enabled = not self._beat_color_enabled
             self._persist_runtime_state()
             return f'Banner beat color: {"ON" if self._beat_color_enabled else "OFF"}'
+        if sym == sdl2.SDLK_d and alt and not ctrl and not shift and not gui:
+            self._drip_enabled = not self._drip_enabled
+            self._persist_runtime_state()
+            return f'Banner drip: {"ON" if self._drip_enabled else "OFF"}'
         if sym == sdl2.SDLK_r and ctrl:
             self._max_line_chars = _DEFAULT_MAX_LINE_CHARS
             self._text = self._build_default_text()
@@ -795,6 +821,12 @@ void main() {
             255,
         )
 
+    def _quantized_fade(self, fade: float) -> int:
+        return round(max(0.0, min(1.0, fade)) * _FADE_QUANT_STEPS)
+
+    def _quantized_color(self, color: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+        return tuple(v - (v % _COLOR_QUANT_STEP) for v in color)
+
     # ── GL texture helpers ────────────────────────────────────────────────────
 
     def _ensure_texture(self, tex: moderngl.Texture | None, size: tuple[int, int]) -> moderngl.Texture:
@@ -846,8 +878,11 @@ void main() {
         color: tuple[int, int, int, int],
         alpha: float,
     ) -> float:
-        """Draw ``text`` character-by-character with a bass/beat-driven
-        vertical wave -- a "drippy" bob-and-sag instead of static glyphs.
+        """Draw ``text``, character-by-character with a bass/beat-driven
+        vertical wave -- a "drippy" bob-and-sag -- when ``self._drip_enabled``,
+        or as one static string otherwise (also cheaper: one draw call
+        instead of one per character, and it makes the banner cacheable
+        across frames -- see ``_banner_cache_key`` in ``render_overlay()``).
 
         Returns the total drawn width (for centering by the caller).
         """
@@ -855,6 +890,10 @@ void main() {
             return 0.0
         a = max(0, min(255, int(color[3] * alpha)))
         col = (color[0], color[1], color[2], a)
+
+        if not self._drip_enabled:
+            draw.text((x, y), text, font=self._font, fill=col)
+            return draw.textlength(text, font=self._font)
 
         # Base wobble is always faintly alive; bass widens the wave, beat
         # adds an extra downward sag per character -- the "drip".
@@ -906,9 +945,10 @@ void main() {
         draw.text((380, 12), f'Max line: {self._max_line_chars}ch',                     font=body_font,  fill=(230, 236, 246, 255))
         draw.text((560, 12), f'Font: {self._font_px}px',                                font=body_font,  fill=(230, 236, 246, 255))
         draw.text((700, 12), f'Beat Color: {"ON" if self._beat_color_enabled else "OFF"}', font=body_font, fill=(230, 236, 246, 255))
+        draw.text((870, 12), f'Drip: {"ON" if self._drip_enabled else "OFF"}',           font=body_font, fill=(230, 236, 246, 255))
         self._draw_config_sprite(draw, panel_w)
 
-        draw.text((14, 44), 'Shift+B: toggle banner   Ctrl+B: close config   Enter: text edit mode',      font=body_font, fill=(184, 204, 224, 255))
+        draw.text((14, 44), 'Shift+B: toggle banner   Ctrl+B: close config   Alt+B: beat color   Alt+D: drip   Enter: text edit mode', font=body_font, fill=(184, 204, 224, 255))
         if self._edit_mode:
             draw.text((14, 64), '↑↓←→/Home/End: move   Shift+move: select   Ctrl+A: select all',          font=body_font, fill=(184, 204, 224, 255))
             draw.text((14, 84), 'Ctrl+C/X/V: copy/cut/paste   Shift+Enter: newline   Ctrl+R: reset text', font=body_font, fill=(184, 204, 224, 255))
@@ -1165,10 +1205,31 @@ void main() {
         self._ctx.viewport = viewport
 
         if self._enabled:
-            banner = self._build_banner_image(canvas_w)
-            arr    = np.asarray(banner, dtype=np.uint8)
-            self._banner_tex = self._ensure_texture(self._banner_tex, (arr.shape[1], arr.shape[0]))
-            self._banner_tex.write(arr.tobytes())
+            size = (canvas_w, self._banner_height)
+            # None (never a cache hit) while drip is on -- the wave/sag
+            # animation changes every frame by design, so there is nothing
+            # to reuse. Otherwise, quantized fade/color so a held or
+            # slowly-fading line collapses many frames onto one cache key.
+            cache_key = None
+            if not self._drip_enabled:
+                line, fade = self._current_line_fade()
+                cache_key = (
+                    size, line, self._quantized_fade(fade),
+                    self._quantized_color(self._current_text_color()),
+                    round(self._alpha, 3),
+                )
+            stale = (
+                self._banner_tex is None
+                or self._banner_tex.size != size
+                or cache_key is None
+                or cache_key != self._banner_cache_key
+            )
+            if stale:
+                banner = self._build_banner_image(canvas_w)
+                arr = np.asarray(banner, dtype=np.uint8)
+                self._banner_tex = self._ensure_texture(self._banner_tex, size)
+                self._banner_tex.write(arr.tobytes())
+                self._banner_cache_key = cache_key
             y = int(canvas_h - self._banner_height)
             self._draw_texture(self._banner_tex, 0.0, float(y), float(canvas_w), float(self._banner_height), canvas_w, canvas_h)
 

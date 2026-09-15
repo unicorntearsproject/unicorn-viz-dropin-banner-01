@@ -1,6 +1,6 @@
 # banner-01 — Bottom Marquee Banner
 
-**Version 0.11.0**
+**Version 0.13.0**
 
 
 A subsystem drop-in for unicorn-viz that renders a full-width bottom banner with
@@ -81,6 +81,23 @@ State is persisted to the app's shared runtime state file (`banner` key in
 
 ## Changelog
 
+- **0.13.0** — Two changes: (1) the rasterized banner image is now cached
+  and reused across frames instead of rebuilt (PIL rasterize + GL texture
+  upload) on every single frame regardless of whether anything changed.
+  The cache key is the canvas/banner size, the displayed line, a quantized
+  fade fraction and beat-color (continuous values collapsed into coarse,
+  visually-imperceptible buckets so a held or slowly-fading line reuses
+  one image across many frames), and the overall alpha. (2) A new
+  **drip toggle** (`Alt+D` in the config modal, **off by default**,
+  persisted in runtime state): the character-by-character wave/sag
+  animation is opt-in now rather than always-on — when off, the line
+  draws as one static string (also cheaper: one draw call instead of one
+  per character) and is fully covered by the new cache; when on, nothing
+  is cached since the animation changes every frame by design, matching
+  the previous always-on behavior exactly. 8 new regression tests.
+- **0.12.0** — `enabled` now defaults to `false` (a fresh install
+  previously opened with the marquee up, surfaced in the 2026-09-14
+  Windows beta); `Shift+B` still toggles it live as before.
 - **0.11.0** — Control Room panel (P1 of `docs/planning/control-room-drop-in-integration-plan-2026-09-05.md`): registered on the shared **OVERLAYS** page — line count, max line length, font size, beat color, and TOGGLE / EDIT (opens the audience-window config modal) / RESET buttons mirroring `Shift+B` / `Ctrl+B` / `Ctrl+R`. Unregistered in `shutdown()`.
 - **0.10.1** — `Ctrl+R` now also resets `max_line_chars` back to the
   default (100), not just the text. Previously, lowering it (`Left` in the
