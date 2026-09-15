@@ -22,7 +22,7 @@ wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.11.0'
+__version__ = '0.12.0'
 
 import logging
 import math
@@ -111,7 +111,9 @@ class BannerController:
         self._ctx: moderngl.Context = app.vj_api.ctx
         self._vj_api = app.vj_api
 
-        self._enabled = bool(self._cfg.get('enabled', True))
+        # Off at boot unless the config says otherwise (owner decision from
+        # the 2026-09-14 Windows beta: the marquee greeted a fresh install).
+        self._enabled = bool(self._cfg.get('enabled', False))
         self._show_config = False
         self._edit_mode = False
 
