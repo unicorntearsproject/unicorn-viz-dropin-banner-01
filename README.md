@@ -1,6 +1,6 @@
 # banner-01 — Bottom Marquee Banner
 
-**Version 0.13.0**
+**Version 0.13.1**
 
 
 A subsystem drop-in for unicorn-viz that renders a full-width bottom banner with
@@ -81,6 +81,17 @@ State is persisted to the app's shared runtime state file (`banner` key in
 
 ## Changelog
 
+- **0.13.1** — Fixed the config modal's own layout, broken by 0.13.0's
+  fixed pixel-offset text placement: at a larger `font_px` (the Up/Down
+  hotkey goes to 56) or a narrower window, the "Alt+D: drip" hotkey hint
+  (and sometimes "Enter: text edit mode" after it) rendered past the
+  panel's right edge — invisible, not just tight — and the Beat
+  Color/Drip status fields could overlap with no gap between them,
+  reading as words running together. The status row and every hotkey
+  hint row now measure each item and wrap to a new line instead of using
+  a fixed x position per item, and the panel grows tall enough to fit
+  whatever that wrapping needs instead of clipping at a fixed 284px. 3
+  new regression tests.
 - **0.13.0** — Two changes: (1) the rasterized banner image is now cached
   and reused across frames instead of rebuilt (PIL rasterize + GL texture
   upload) on every single frame regardless of whether anything changed.

@@ -22,7 +22,7 @@ wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.13.0'
+__version__ = '0.13.1'
 
 import logging
 import math
@@ -931,36 +931,73 @@ void main() {
 
     def _build_modal_image(self, width: int) -> tuple[Image.Image, int, int]:
         panel_w = min(width - 40, 1260)
-        panel_h = 284
-        panel   = Image.new('RGBA', (panel_w, panel_h), (9, 12, 24, 240))
-        draw    = ImageDraw.Draw(panel)
-
-        draw.rectangle((0, 0, panel_w - 1, panel_h - 1), outline=(72, 186, 255, 255), width=2)
         title_font = self._load_font(max(18, self._font_px - 4))
         body_font  = self._load_font(max(14, self._font_px - 9))
         mono_font  = self._load_font(max(14, self._font_px - 10))
 
-        draw.text((14, 10),  'BANNER CONFIG',                                            font=title_font, fill=(170, 220, 255, 255))
-        draw.text((250, 12), f'Status: {"ON" if self._enabled else "OFF"}',              font=body_font,  fill=(230, 236, 246, 255))
-        draw.text((380, 12), f'Max line: {self._max_line_chars}ch',                     font=body_font,  fill=(230, 236, 246, 255))
-        draw.text((560, 12), f'Font: {self._font_px}px',                                font=body_font,  fill=(230, 236, 246, 255))
-        draw.text((700, 12), f'Beat Color: {"ON" if self._beat_color_enabled else "OFF"}', font=body_font, fill=(230, 236, 246, 255))
-        draw.text((870, 12), f'Drip: {"ON" if self._drip_enabled else "OFF"}',           font=body_font, fill=(230, 236, 246, 255))
-        self._draw_config_sprite(draw, panel_w)
-
-        draw.text((14, 44), 'Shift+B: toggle banner   Ctrl+B: close config   Alt+B: beat color   Alt+D: drip   Enter: text edit mode', font=body_font, fill=(184, 204, 224, 255))
-        if self._edit_mode:
-            draw.text((14, 64), '↑↓←→/Home/End: move   Shift+move: select   Ctrl+A: select all',          font=body_font, fill=(184, 204, 224, 255))
-            draw.text((14, 84), 'Ctrl+C/X/V: copy/cut/paste   Shift+Enter: newline   Ctrl+R: reset text', font=body_font, fill=(184, 204, 224, 255))
-        else:
-            draw.text((14, 64), 'Left/Right: max line length   Up/Down: font   Ctrl+R: reset text/line length', font=body_font, fill=(184, 204, 224, 255))
-            draw.text((14, 84), 'Enter to start editing text below',                                       font=body_font, fill=(184, 204, 224, 255))
-
+        title_text = 'BANNER CONFIG'
+        stats_items = [
+            f'Status: {"ON" if self._enabled else "OFF"}',
+            f'Max line: {self._max_line_chars}ch',
+            f'Font: {self._font_px}px',
+            f'Beat Color: {"ON" if self._beat_color_enabled else "OFF"}',
+            f'Drip: {"ON" if self._drip_enabled else "OFF"}',
+        ]
         edit_state = 'EDITING' if self._edit_mode else 'VIEW'
         edit_color = (255, 214, 110, 255) if self._edit_mode else (176, 196, 220, 255)
-        draw.text((14, 106), f'Mode: {edit_state}', font=body_font, fill=edit_color)
+        hint_rows: list[list[str]] = [
+            [
+                'Shift+B: toggle banner', 'Ctrl+B: close config',
+                'Alt+B: beat color', 'Alt+D: drip', 'Enter: text edit mode',
+            ],
+        ]
+        if self._edit_mode:
+            hint_rows.append(['↑↓←→/Home/End: move', 'Shift+move: select', 'Ctrl+A: select all'])
+            hint_rows.append(['Ctrl+C/X/V: copy/cut/paste', 'Shift+Enter: newline', 'Ctrl+R: reset text'])
+        else:
+            hint_rows.append(['Left/Right: max line length', 'Up/Down: font', 'Ctrl+R: reset text/line length'])
+            hint_rows.append(['Enter to start editing text below'])
 
-        textarea = _TextAreaLayout(x=14, y=128, w=panel_w - 28, h=panel_h - 142, padding=10, lines=4)
+        def _layout(draw: 'ImageDraw.ImageDraw', dry_run: bool) -> int:
+            """Draw (or just measure, if dry_run) the whole modal body
+            and return the y just below the last hint row -- the textarea
+            starts there. Identical code both passes so they can't drift
+            out of sync with each other."""
+            if not dry_run:
+                draw.text((14, 10), title_text, font=title_font, fill=(170, 220, 255, 255))
+                self._draw_config_sprite(draw, panel_w)
+            title_w = draw.textlength(title_text, font=title_font)
+            stats_x = 14 + title_w + 24
+            stats_max_w = panel_w - stats_x - 96  # stay clear of the sprite (80px + margin)
+            stats_h = self._draw_wrapped_row(
+                draw, int(stats_x), 12, int(stats_max_w), stats_items,
+                body_font, (230, 236, 246, 255), dry_run=dry_run,
+            )
+            y = max(10 + stats_h, 74) + 6  # 74 == sprite bottom (y0=10, size=64)
+            hint_max_w = panel_w - 28
+            for row in hint_rows:
+                y += self._draw_wrapped_row(
+                    draw, 14, y, hint_max_w, row,
+                    body_font, (184, 204, 224, 255), dry_run=dry_run,
+                )
+            if not dry_run:
+                draw.text((14, y), f'Mode: {edit_state}', font=body_font, fill=edit_color)
+            return y + self._line_height(draw, body_font) + 8
+
+        measure_img = Image.new('RGBA', (8, 8))
+        measure_draw = ImageDraw.Draw(measure_img)
+        content_y = _layout(measure_draw, dry_run=True)
+
+        mono_line_h = self._line_height(measure_draw, mono_font)
+        textarea_h = max(110, mono_line_h * 4 + 24)
+        panel_h = content_y + textarea_h + 14
+
+        panel = Image.new('RGBA', (panel_w, panel_h), (9, 12, 24, 240))
+        draw  = ImageDraw.Draw(panel)
+        draw.rectangle((0, 0, panel_w - 1, panel_h - 1), outline=(72, 186, 255, 255), width=2)
+        _layout(draw, dry_run=False)
+
+        textarea = _TextAreaLayout(x=14, y=content_y, w=panel_w - 28, h=textarea_h, padding=10, lines=4)
         self._draw_textarea(
             draw=draw,
             font=mono_font,
@@ -1011,6 +1048,44 @@ void main() {
     def _line_height(self, draw: 'ImageDraw.ImageDraw', font: 'ImageFont.ImageFont') -> int:
         bbox = draw.textbbox((0, 0), 'Ag', font=font)
         return max(16, int(bbox[3] - bbox[1]))
+
+    def _draw_wrapped_row(
+        self,
+        draw: 'ImageDraw.ImageDraw',
+        x: int, y: int, max_w: int,
+        items: list[str],
+        font: 'ImageFont.ImageFont',
+        fill: tuple[int, int, int, int],
+        dry_run: bool = False,
+        gap: int = 24,
+    ) -> int:
+        """Draw ``items`` left to right starting at ``(x, y)``, wrapping to
+        a new line whenever the next item would run past ``x + max_w``.
+
+        Fixed per-item pixel offsets don't adapt to the user's
+        configurable ``font_px`` (16-56px, a >3x range): at a larger size
+        an item can run into the next one with no visible gap, or the
+        whole row can extend past the panel's right edge and render
+        off-canvas -- invisible, not just tight. Measuring each item and
+        wrapping avoids both. With ``dry_run``, only measures (no actual
+        ``draw.text()`` calls) -- used for a first pass that sizes the
+        panel before a second, real pass draws into it (same trick as
+        ``_compute_banner_height()``: PIL text metrics only need the
+        font, not a correctly-sized image).
+
+        Returns the total height drawn, for stacking whatever is next.
+        """
+        line_h = self._line_height(draw, font) + 8
+        cx, cy = x, y
+        for item in items:
+            w = draw.textlength(item, font=font)
+            if cx > x and cx + w > x + max_w:
+                cx = x
+                cy += line_h
+            if not dry_run:
+                draw.text((cx, cy), item, font=font, fill=fill)
+            cx += w + gap
+        return (cy - y) + line_h
 
     def _fit_end(
         self, draw: 'ImageDraw.ImageDraw', font: 'ImageFont.ImageFont',
