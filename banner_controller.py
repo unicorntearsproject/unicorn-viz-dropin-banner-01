@@ -22,7 +22,7 @@ wrapping a too-long row.
 """
 from __future__ import annotations
 
-__version__ = '0.13.1'
+__version__ = '0.14.0'
 
 import logging
 import math
@@ -109,6 +109,36 @@ class BannerController:
     """
 
     HELP_ENTRIES = HELP_ENTRIES
+
+
+    # -- Config editor (core `c`, Performance tab) ---------------------------
+    # The two switches that make the banner re-raster: drip every frame while
+    # animating, beat color on every beat.  Same state as Alt+D / Alt+B in the
+    # banner modal; persisted with the rest of the banner's runtime state.
+    CONFIG_EDITOR_CATEGORY = 'Performance'
+    CONFIG_EDITOR_KEY = 'banner'
+    CONFIG_EDITOR_TITLE = 'Banner'
+
+    def config_editor_settings(self) -> list[dict[str, object]]:
+        """Drip animation and beat color as toggles."""
+        return [
+            {'name': 'drip_enabled', 'label': 'Drip animation', 'kind': 'toggle',
+             'value': 1.0 if self._drip_enabled else 0.0,
+             'hint': 'Organic edge sag; re-rasters the banner every frame while on'},
+            {'name': 'beat_color_enabled', 'label': 'Beat color', 'kind': 'toggle',
+             'value': 1.0 if self._beat_color_enabled else 0.0,
+             'hint': 'Recolors the banner on every beat (a re-raster per beat)'},
+        ]
+
+    def set_config_setting(self, name: str, value: float) -> None:
+        """Apply a row live and persist it with the banner's own state."""
+        if name == 'drip_enabled':
+            self._drip_enabled = float(value) >= 0.5
+        elif name == 'beat_color_enabled':
+            self._beat_color_enabled = float(value) >= 0.5
+        else:
+            return
+        self._persist_runtime_state()
 
     def captures_global_hotkeys(self) -> bool:
         """Return True when banner UI should own plain key input."""

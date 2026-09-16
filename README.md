@@ -1,6 +1,6 @@
 # banner-01 — Bottom Marquee Banner
 
-**Version 0.13.1**
+**Version 0.14.0**
 
 
 A subsystem drop-in for unicorn-viz that renders a full-width bottom banner with
@@ -81,6 +81,7 @@ State is persisted to the app's shared runtime state file (`banner` key in
 
 ## Changelog
 
+- **0.14.0** — Drip animation and beat color join the core config editor's Performance tab as toggles (same state as Alt+D / Alt+B, persisted with the banner's runtime state).
 - **0.13.1** — Fixed the config modal's own layout, broken by 0.13.0's
   fixed pixel-offset text placement: at a larger `font_px` (the Up/Down
   hotkey goes to 56) or a narrower window, the "Alt+D: drip" hotkey hint
